@@ -27,6 +27,9 @@ _LABEL_COLORS: list[tuple[int, int, int]] = [
 
 def _normalize_slice(arr: np.ndarray, wl: float = 40.0, ww: float = 400.0) -> np.ndarray:
     """CT HU값을 윈도우 레벨로 정규화하여 0-255 uint8 반환."""
+    # 이미 0-1 범위면 바로 변환
+    if arr.max() <= 1.0 and arr.min() >= 0.0:
+        return (arr * 255).astype(np.uint8)
     lo = wl - ww / 2
     hi = wl + ww / 2
     clipped = np.clip(arr, lo, hi)
@@ -193,13 +196,14 @@ def make_panel(
     if not imgs:
         return np.zeros((1, 1, 3), dtype=np.uint8)
 
-    max_h = max(im.shape[0] for im in imgs)
+    from PIL import Image as _Image
+    target_size = 256
     padded: list[np.ndarray] = []
     for im in imgs:
-        h, w = im.shape[:2]
-        canvas = np.zeros((max_h, w, 3), dtype=np.uint8)
-        canvas[:h, :w] = im
-        padded.append(canvas)
+        pil = _Image.fromarray(im)
+        pil = pil.resize((target_size, target_size), _Image.NEAREST)
+        padded.append(np.array(pil))
+    max_h = target_size
 
     sep = np.zeros((max_h, padding, 3), dtype=np.uint8)
     parts: list[np.ndarray] = []

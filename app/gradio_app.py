@@ -126,7 +126,7 @@ def run_inference(
     # 시각화: 마스크가 있는 슬라이스 자동 선택
     D = _current_volume.shape[0]
     auto_idx = _best_slice_index(mask) if stats.voxel_count > 0 else D // 2
-    chosen_idx = slice_idx if slice_idx != -1 else auto_idx
+    chosen_idx = auto_idx if slice_idx == 0 else slice_idx
 
     label_names = {1: get_korean_term(organ_label)} if organ_label else None
     views = get_slice_views(
@@ -191,7 +191,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
             gr.Examples(examples=EXAMPLES_Q, inputs=[question_input], label="예시 질문")
 
             with gr.Accordion("시각화 설정", open=False):
-                slice_slider = gr.Slider(0, 31, value=-1, step=1, label="축상 슬라이스 번호 (-1=자동)")
+                slice_slider = gr.Slider(0, 31, value=0, step=1, label="축상 슬라이스 번호 (-1=자동)")
                 alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
                 wl_slider = gr.Slider(-200, 400, value=40, step=10, label="윈도우 레벨 (HU)")
                 ww_slider = gr.Slider(100, 2000, value=400, step=50, label="윈도우 너비 (HU)")
