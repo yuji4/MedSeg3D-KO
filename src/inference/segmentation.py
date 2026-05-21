@@ -22,12 +22,21 @@ _SEG_INTENT = re.compile(
 )
 
 
-def _detect_organ_en(question_ko: str) -> str | None:
-    """한국어 질문에서 장기 영문명을 추출. 못 찾으면 None."""
+def _detect_organs_en(question_ko: str) -> list[str]:
+    """한국어 질문에서 장기 영문명을 모두 추출 (긴 이름 우선, 중복 제거)."""
+    found: list[str] = []
+    seen: set[str] = set()
     for ko, en in sorted(_KO_TO_EN.items(), key=lambda x: len(x[0]), reverse=True):
-        if ko in question_ko:
-            return en
-    return None
+        if ko in question_ko and en not in seen:
+            found.append(en)
+            seen.add(en)
+    return found
+
+
+def _detect_organ_en(question_ko: str) -> str | None:
+    """하위 호환: 첫 번째 장기만 반환."""
+    organs = _detect_organs_en(question_ko)
+    return organs[0] if organs else None
 
 
 def _translate_ko_to_en(text: str) -> str:
@@ -39,15 +48,16 @@ def _translate_ko_to_en(text: str) -> str:
         return text
 
 
-def _build_english_prompt(question_ko: str) -> str:
+def _build_english_prompt(question_ko: str, organ_en: str | None = None) -> str:
     """
     한국어 질문을 M3D 모델이 이해하는 영문 프롬프트로 변환.
 
-    우선순위:
-      1. 장기명 사전 + 의도 패턴 매칭 → 정형화된 프롬프트
-      2. 장기명 미탐지 → deep-translator 번역 후 그대로 전달
+    Args:
+        question_ko: 원문 한국어 질문 (의도 판단용)
+        organ_en:    명시적 장기명. None이면 question_ko에서 자동 감지.
     """
-    organ_en = _detect_organ_en(question_ko)
+    if organ_en is None:
+        organ_en = _detect_organ_en(question_ko)
     is_seg = bool(_SEG_INTENT.search(question_ko))
 
     if organ_en and is_seg:
@@ -119,43 +129,34 @@ class SegmentationPipeline:
     def is_loaded(self) -> bool:
         return self.model is not None
 
-    def run(
+    def _prepare_image_pt(
+        self, image_np: np.ndarray
+    ) -> tuple[torch.Tensor, np.ndarray]:
+        """전처리 + GPU 텐서 변환. 여러 장기 추론 시 한 번만 호출하도록 분리."""
+        preprocessed, original = preprocess_volume(image_np)
+        dtype = next(self.model.parameters()).dtype
+        image_pt = (
+            torch.from_numpy(preprocessed)
+            .unsqueeze(0)
+            .to(dtype=dtype, device=self._device)
+        )
+        return image_pt, original
+
+    def _infer(
         self,
-        image_np: np.ndarray,
-        question_ko: str,
+        image_pt: torch.Tensor,
+        original: np.ndarray,
+        organ_en: str,
+        question_ko: str = "",
         max_new_tokens: int = 256,
         do_sample: bool = False,
         top_p: float | None = None,
         temperature: float = 1.0,
     ) -> dict:
-        """
-        CT 볼륨과 한국어 질문을 받아 세그멘테이션을 수행.
-
-        Args:
-            image_np: (D, H, W) 또는 (1, D, H, W) CT 배열
-            question_ko: 한국어 질문 (예: "간을 분할해줘")
-
-        Returns:
-            {
-                "question_en": str,          # 변환된 영문 프롬프트
-                "answer_en": str,            # 모델 원문 응답
-                "organ_label": str | None,   # 감지된 영문 장기명
-                "mask": np.ndarray,          # bool (D, H, W) — 입력과 동일 크기로 복원
-                "mask_model": np.ndarray,    # bool (32, 256, 256) — 모델 출력 원본
-            }
-        """
-        if not self.is_loaded:
-            raise RuntimeError("모델이 로드되지 않았습니다. pipeline.load()를 먼저 호출하세요.")
-
-        question_en = _build_english_prompt(question_ko)
-        organ_en = _detect_organ_en(question_ko)
-
-        preprocessed, original = preprocess_volume(image_np)
-
-        dtype = next(self.model.parameters()).dtype
+        """전처리된 텐서로 단일 장기 추론. run / run_single 공통 내부 로직."""
+        question_en = _build_english_prompt(question_ko, organ_en=organ_en)
         prompt = "<im_patch>" * PROJ_OUT_NUM + question_en
         input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"].to(self._device)
-        image_pt = torch.from_numpy(preprocessed).unsqueeze(0).to(dtype=dtype, device=self._device)
 
         with torch.no_grad():
             generation, seg_logit = self.model.generate(
@@ -170,9 +171,8 @@ class SegmentationPipeline:
 
         answer_en = self.tokenizer.batch_decode(generation, skip_special_tokens=True)[0]
         mask_model = (torch.sigmoid(seg_logit) > 0.5).squeeze().cpu().numpy().astype(bool)
-
-        # 마스크를 원본 볼륨 크기로 복원
-        mask = self._resize_mask(mask_model, original.shape[-3:] if original.ndim == 4 else original.shape)
+        orig_shape = original.shape[-3:] if original.ndim == 4 else original.shape
+        mask = self._resize_mask(mask_model, orig_shape)
 
         return {
             "question_en": question_en,
@@ -181,6 +181,71 @@ class SegmentationPipeline:
             "mask": mask,
             "mask_model": mask_model,
         }
+
+    def run_single(
+        self,
+        image_np: np.ndarray,
+        organ_en: str,
+        question_ko: str = "",
+        **kwargs,
+    ) -> dict:
+        """
+        단일 장기명을 명시하여 추론.
+        여러 장기를 순차적으로 처리할 때 gradio_app에서 호출.
+        """
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다. pipeline.load()를 먼저 호출하세요.")
+        image_pt, original = self._prepare_image_pt(image_np)
+        return self._infer(image_pt, original, organ_en, question_ko, **kwargs)
+
+    def run(
+        self,
+        image_np: np.ndarray,
+        question_ko: str,
+        max_new_tokens: int = 256,
+        do_sample: bool = False,
+        top_p: float | None = None,
+        temperature: float = 1.0,
+    ) -> dict:
+        """
+        CT 볼륨과 한국어 질문을 받아 세그멘테이션 수행 (단일 장기 / 폴백).
+
+        Returns:
+            {
+                "question_en": str,
+                "answer_en": str,
+                "organ_label": str | None,
+                "mask": np.ndarray,       # bool (D, H, W)
+                "mask_model": np.ndarray, # bool (32, 256, 256)
+            }
+        """
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다. pipeline.load()를 먼저 호출하세요.")
+
+        organ_en = _detect_organ_en(question_ko)
+        image_pt, original = self._prepare_image_pt(image_np)
+
+        if organ_en:
+            return self._infer(image_pt, original, organ_en, question_ko,
+                               max_new_tokens=max_new_tokens, do_sample=do_sample,
+                               top_p=top_p, temperature=temperature)
+
+        # 장기 미탐지 시 번역 폴백
+        question_en = _build_english_prompt(question_ko)
+        prompt = "<im_patch>" * PROJ_OUT_NUM + question_en
+        input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"].to(self._device)
+        with torch.no_grad():
+            generation, seg_logit = self.model.generate(
+                image_pt, input_ids, seg_enable=True,
+                max_new_tokens=max_new_tokens, do_sample=do_sample,
+                top_p=top_p, temperature=temperature,
+            )
+        answer_en = self.tokenizer.batch_decode(generation, skip_special_tokens=True)[0]
+        mask_model = (torch.sigmoid(seg_logit) > 0.5).squeeze().cpu().numpy().astype(bool)
+        orig_shape = original.shape[-3:] if original.ndim == 4 else original.shape
+        mask = self._resize_mask(mask_model, orig_shape)
+        return {"question_en": question_en, "answer_en": answer_en,
+                "organ_label": None, "mask": mask, "mask_model": mask_model}
 
     @staticmethod
     def _resize_mask(

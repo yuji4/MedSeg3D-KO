@@ -16,7 +16,7 @@ import gradio as gr
 from PIL import Image
 
 from src.inference.model_loader import ModelConfig, get_colab_config
-from src.inference.segmentation import SegmentationPipeline, preprocess_volume
+from src.inference.segmentation import SegmentationPipeline, preprocess_volume, _detect_organs_en
 from src.analysis.volume import analyze_mask
 from src.translation.translator import MedicalTranslator
 from src.translation.medical_terms import get_korean_term
@@ -90,8 +90,11 @@ def run_inference(
     ww: float,
 ) -> tuple[Image.Image | None, str, str]:
     """
+    단일/복수 장기 세그멘테이션을 수행하고 결과를 반환.
+    "간이랑 신장 분할해줘" 처럼 여러 장기를 감지하면 각각 추론 후 합성.
+
     Returns:
-        (panel_image, volume_report, model_answer_ko)
+        (panel_image, volume_report, answer_ko)
     """
     global _current_volume, _current_spacing
 
@@ -105,41 +108,74 @@ def run_inference(
     except Exception as e:
         return None, "", f"모델 로드 실패: {e}"
 
+    organs = _detect_organs_en(question_ko)
+
+    # ── 장기별 추론 ──────────────────────────────────────────────────────────
     try:
-        result = pipeline.run(_current_volume, question_ko)
+        if not organs:
+            # 장기 미탐지 → 번역 폴백 단일 추론
+            results = [pipeline.run(_current_volume, question_ko)]
+            organs = [results[0]["organ_label"] or ""]
+        else:
+            # 전처리는 한 번, 장기마다 추론 재사용
+            image_pt, original = pipeline._prepare_image_pt(_current_volume)
+            results = [
+                pipeline._infer(image_pt, original, org, question_ko)
+                for org in organs
+            ]
     except Exception as e:
         return None, "", f"추론 오류: {e}"
 
-    mask = result["mask"]           # (D, H, W) bool
-    organ_label = result["organ_label"] or ""
-    answer_en = result["answer_en"]
+    # ── 마스크 합성 (장기마다 다른 레이블 인덱스) ────────────────────────────
+    vol_shape = _current_volume.shape
+    combined_mask = np.zeros(vol_shape, dtype=np.uint8)
+    label_names: dict[int, str] = {}
+    for lbl_idx, (org, res) in enumerate(zip(organs, results), start=1):
+        if res["mask"].any():
+            combined_mask[res["mask"]] = lbl_idx
+        label_names[lbl_idx] = get_korean_term(org) if org else f"구조물 {lbl_idx}"
 
-    # 부피 계산
-    stats = analyze_mask(mask, label=organ_label, voxel_spacing_mm=_current_spacing)
-    volume_report = stats.summary_ko() if stats.voxel_count > 0 else "마스크가 감지되지 않았습니다."
+    # ── 부피 통계 (장기별) ───────────────────────────────────────────────────
+    volume_lines: list[str] = []
+    answer_lines: list[str] = []
+    any_detected = False
 
-    # 한국어 번역 응답
-    answer_ko = _translator.translate_segmentation_result(
-        organ_label, present=stats.voxel_count > 0, volume_ml=stats.volume_ml
-    )
+    for lbl_idx, (org, res) in enumerate(zip(organs, results), start=1):
+        organ_mask = combined_mask == lbl_idx
+        stats = analyze_mask(organ_mask, label=org, voxel_spacing_mm=_current_spacing)
+        present = stats.voxel_count > 0
+        if present:
+            any_detected = True
+        volume_lines.append(stats.summary_ko() if present else f"[{get_korean_term(org)}] 마스크가 감지되지 않았습니다.")
+        answer_lines.append(
+            _translator.translate_segmentation_result(org, present=present, volume_ml=stats.volume_ml if present else None)
+        )
 
-    # 시각화: 마스크가 있는 슬라이스 자동 선택
+    volume_report = "\n\n".join(volume_lines)
+    answer_ko = "\n".join(answer_lines)
+
+    # ── 시각화 ──────────────────────────────────────────────────────────────
     D = _current_volume.shape[0]
-    auto_idx = _best_slice_index(mask) if stats.voxel_count > 0 else D // 2
-    chosen_idx = auto_idx if slice_idx == 0 else slice_idx
+    if any_detected:
+        auto_idx = _best_slice_index(combined_mask > 0)
+    else:
+        auto_idx = D // 2
+    chosen_idx = max(0, min(auto_idx if slice_idx == 0 else slice_idx, D - 1))
 
-    label_names = {1: get_korean_term(organ_label)} if organ_label else None
     views = get_slice_views(
         _current_volume,
-        mask.astype(np.uint8),
-        slice_indices={"axial": chosen_idx, "sagittal": _current_volume.shape[2] // 2, "coronal": _current_volume.shape[1] // 2},
+        combined_mask,
+        slice_indices={
+            "axial": chosen_idx,
+            "sagittal": _current_volume.shape[2] // 2,
+            "coronal": _current_volume.shape[1] // 2,
+        },
         alpha=alpha,
         wl=wl,
         ww=ww,
         label_names=label_names,
     )
-    panel = make_panel(views)
-    panel_img = Image.fromarray(panel)
+    panel_img = Image.fromarray(make_panel(views))
 
     return panel_img, volume_report, answer_ko
 
