@@ -1,0 +1,29 @@
+{
+  "note": "M3D 모델 세그멘테이션 레이블 인덱스 → 영문 장기명 매핑 (데이터셋별로 다를 수 있음)",
+  "totalsegmentator": {
+    "1": "spleen",
+    "2": "right kidney",
+    "3": "left kidney",
+    "4": "gallbladder",
+    "5": "liver",
+    "6": "stomach",
+    "7": "aorta",
+    "8": "inferior vena cava",
+    "9": "portal vein and splenic vein",
+    "10": "pancreas",
+    "11": "right adrenal gland",
+    "12": "left adrenal gland",
+    "13": "duodenum",
+    "14": "bladder",
+    "15": "prostate or uterus"
+  },
+  "luna16": {
+    "1": "left lung",
+    "2": "right lung"
+  },
+  "kits": {
+    "1": "kidney",
+    "2": "kidney tumor",
+    "3": "kidney cyst"
+  }
+}
