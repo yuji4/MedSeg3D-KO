@@ -30,11 +30,18 @@ _STATUS_COLOR = {
     "unknown": (108, 117, 125),  # 회색
 }
 
-_STATUS_LABEL = {
-    "normal":  "✓ 정상",
-    "high":    "↑ 초과",
-    "low":     "↓ 미만",
-    "unknown": "— 없음",
+_STATUS_LABEL_KO = {
+    "normal":  "정상",
+    "high":    "초과",
+    "low":     "미만",
+    "unknown": "없음",
+}
+
+_STATUS_LABEL_EN = {
+    "normal":  "Normal",
+    "high":    "High",
+    "low":     "Low",
+    "unknown": "N/A",
 }
 
 
@@ -121,9 +128,11 @@ def _organ_table(pdf: _PDF, organ_results: list[dict]) -> None:
 
         organ_name = get_korean_term(label) if pdf._ko else label
         nr: NormalRange = assessment.normal_range
-        range_str = f"{nr.lo:.0f}~{nr.hi:.0f}" if (nr.lo is not None and nr.hi is not None) else "—"
-        status_lbl = _STATUS_LABEL.get(assessment.status, "?")
-        note_str = nr.note[:10] if nr.note else ""  # 넘치지 않게 자름
+        range_str = f"{nr.lo:.0f}~{nr.hi:.0f}" if (nr.lo is not None and nr.hi is not None) else "-"
+        lbl_map = _STATUS_LABEL_KO if pdf._ko else _STATUS_LABEL_EN
+        status_lbl = lbl_map.get(assessment.status, "?")
+        # 비고: 한국어 폰트 없으면 생략 (Helvetica가 한글 인코딩 불가)
+        note_str = (nr.note[:10] if nr.note else "") if pdf._ko else ""
 
         pdf.cell(col[0], 7, organ_name, border=1, fill=True)
         pdf.cell(col[1], 7, f"{stats.volume_ml:.1f}", border=1, fill=True, align="C")
@@ -157,7 +166,13 @@ def _findings_section(pdf: _PDF, organ_results: list[dict]) -> None:
         pdf.set_text_color(0, 0, 0)
         pdf._font(9)
         for a in items:
-            pdf.multi_cell(0, 6, f"  {a.message_ko}", new_x="LMARGIN", new_y="NEXT")
+            if pdf._ko:
+                line = f"  {a.message_ko}"
+            else:
+                nr = a.normal_range
+                ref = f" (ref: {nr.lo:.0f}~{nr.hi:.0f} mL)" if (nr.lo is not None and nr.hi is not None) else ""
+                line = f"  {a.label}: {a.volume_ml:.1f} mL — {a.status.upper()}{ref}"
+            pdf.multi_cell(0, 6, line, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
 
 
