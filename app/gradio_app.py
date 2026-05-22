@@ -77,6 +77,8 @@ footer { display: none; }
 .gradio-container { max-width: 1800px !important; margin: 0 auto !important; }
 .card-scroll { max-height: 480px; overflow-y: auto; padding-right: 4px; }
 .view-label { text-align:center; color:#64748b; font-size:0.78rem; padding:3px 0; }
+#volume_box textarea { overflow-y: auto !important; resize: none; }
+#clinical_box textarea { overflow-y: auto !important; resize: none; }
 """
 
 
@@ -303,13 +305,12 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
     chosen_idx = max(0, min(auto_idx if slice_idx == 0 else slice_idx, D - 1))
 
     eff_mask = combined_mask if mask_on else None
-    eff_labels = label_names if mask_on else None
     views = get_slice_views(
         _current_volume, eff_mask,
         slice_indices={"axial": chosen_idx,
                        "sagittal": _current_volume.shape[2] // 2,
                        "coronal": _current_volume.shape[1] // 2},
-        alpha=alpha, wl=wl, ww=ww, label_names=eff_labels,
+        alpha=alpha, wl=wl, ww=ww, label_names=None,
     )
     panel_arr = make_panel(views)
 
@@ -354,13 +355,12 @@ def update_preview(slice_idx, alpha, wl, ww, mask_on):
     D = _current_volume.shape[0]
     idx = max(0, min(int(slice_idx), D - 1))
     eff_mask = _last_inference.get("combined_mask") if mask_on else None
-    eff_labels = _last_inference.get("label_names") if (eff_mask is not None) else None
     views = get_slice_views(
         _current_volume, eff_mask,
         slice_indices={"axial": idx,
                        "sagittal": _current_volume.shape[2] // 2,
                        "coronal": _current_volume.shape[1] // 2},
-        wl=wl, ww=ww, alpha=alpha, label_names=eff_labels,
+        wl=wl, ww=ww, alpha=alpha, label_names=None,
     )
     return _views_to_pil(views)
 
@@ -468,11 +468,13 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             with gr.Accordion("📈 부피 상세 통계", open=False):
                 volume_box = gr.Textbox(
                     label=None, lines=6, interactive=False, show_copy_button=True,
+                    elem_id="volume_box",
                 )
 
             with gr.Accordion("🩺 임상 소견 상세", open=False):
                 clinical_box = gr.Textbox(
                     label=None, lines=8, interactive=False, show_copy_button=True,
+                    elem_id="clinical_box",
                 )
 
     # ━━ 액션 바 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
