@@ -18,6 +18,8 @@ from PIL import Image
 from src.inference.model_loader import ModelConfig, get_colab_config
 from src.inference.segmentation import SegmentationPipeline, preprocess_volume, _detect_organs_en
 from src.analysis.volume import analyze_mask
+from src.analysis.clinical import assess_organ, format_clinical_summary
+from src.analysis.report import generate_report
 from src.translation.translator import MedicalTranslator
 from src.translation.medical_terms import get_korean_term
 from app.visualization import get_slice_views, make_panel
@@ -30,6 +32,9 @@ _translator = MedicalTranslator()
 # 현재 로드된 볼륨 (전역 캐시)
 _current_volume: np.ndarray | None = None
 _current_spacing: tuple[float, float, float] = (1.0, 1.0, 1.0)
+
+# 마지막 추론 결과 (PDF 생성용)
+_last_inference: dict = {}
 
 
 # ── 초기화 ────────────────────────────────────────────────────────────────────
@@ -94,19 +99,19 @@ def run_inference(
     "간이랑 신장 분할해줘" 처럼 여러 장기를 감지하면 각각 추론 후 합성.
 
     Returns:
-        (panel_image, volume_report, answer_ko)
+        (panel_image, volume_report, answer_ko, clinical_text)
     """
-    global _current_volume, _current_spacing
+    global _current_volume, _current_spacing, _last_inference
 
     if _current_volume is None:
-        return None, "", "먼저 CT 파일을 업로드해주세요."
+        return None, "", "먼저 CT 파일을 업로드해주세요.", ""
     if not question_ko.strip():
-        return None, "", "질문을 입력해주세요."
+        return None, "", "질문을 입력해주세요.", ""
 
     try:
         pipeline = _get_pipeline()
     except Exception as e:
-        return None, "", f"모델 로드 실패: {e}"
+        return None, "", f"모델 로드 실패: {e}", ""
 
     organs = _detect_organs_en(question_ko)
 
@@ -124,7 +129,7 @@ def run_inference(
                 for org in organs
             ]
     except Exception as e:
-        return None, "", f"추론 오류: {e}"
+        return None, "", f"추론 오류: {e}", ""
 
     # ── 마스크 합성 (장기마다 다른 레이블 인덱스) ────────────────────────────
     vol_shape = _current_volume.shape
@@ -135,9 +140,11 @@ def run_inference(
             combined_mask[res["mask"]] = lbl_idx
         label_names[lbl_idx] = get_korean_term(org) if org else f"구조물 {lbl_idx}"
 
-    # ── 부피 통계 (장기별) ───────────────────────────────────────────────────
+    # ── 부피 통계 + 임상 평가 (장기별) ─────────────────────────────────────
     volume_lines: list[str] = []
     answer_lines: list[str] = []
+    organ_results: list[dict] = []
+    assessments = []
     any_detected = False
 
     for lbl_idx, (org, res) in enumerate(zip(organs, results), start=1):
@@ -146,6 +153,11 @@ def run_inference(
         present = stats.voxel_count > 0
         if present:
             any_detected = True
+
+        assessment = assess_organ(org, stats.volume_ml) if present else assess_organ(org, 0.0)
+        assessments.append(assessment)
+        organ_results.append({"label": org, "stats": stats, "assessment": assessment})
+
         volume_lines.append(stats.summary_ko() if present else f"[{get_korean_term(org)}] 마스크가 감지되지 않았습니다.")
         answer_lines.append(
             _translator.translate_segmentation_result(org, present=present, volume_ml=stats.volume_ml if present else None)
@@ -153,13 +165,11 @@ def run_inference(
 
     volume_report = "\n\n".join(volume_lines)
     answer_ko = "\n".join(answer_lines)
+    clinical_text = format_clinical_summary(assessments)
 
     # ── 시각화 ──────────────────────────────────────────────────────────────
     D = _current_volume.shape[0]
-    if any_detected:
-        auto_idx = _best_slice_index(combined_mask > 0)
-    else:
-        auto_idx = D // 2
+    auto_idx = _best_slice_index(combined_mask > 0) if any_detected else D // 2
     chosen_idx = max(0, min(auto_idx if slice_idx == 0 else slice_idx, D - 1))
 
     views = get_slice_views(
@@ -175,15 +185,35 @@ def run_inference(
         ww=ww,
         label_names=label_names,
     )
-    panel_img = Image.fromarray(make_panel(views))
+    panel_arr = make_panel(views)
+    panel_img = Image.fromarray(panel_arr)
 
-    return panel_img, volume_report, answer_ko
+    # ── PDF 생성을 위한 상태 저장 ────────────────────────────────────────────
+    _last_inference.update({
+        "organ_results": organ_results,
+        "panel_image": panel_arr,
+        "patient_id": "",
+    })
+
+    return panel_img, volume_report, answer_ko, clinical_text
 
 
 def _best_slice_index(mask: np.ndarray) -> int:
     """마스크 면적이 가장 큰 축상 슬라이스 인덱스."""
     counts = mask.sum(axis=(1, 2))
     return int(np.argmax(counts))
+
+
+def generate_pdf_report(patient_id: str = "") -> str | None:
+    """마지막 추론 결과로 PDF 보고서를 생성하고 파일 경로 반환."""
+    if not _last_inference.get("organ_results"):
+        return None
+    _last_inference["patient_id"] = patient_id
+    return generate_report(
+        organ_results=_last_inference["organ_results"],
+        panel_image=_last_inference.get("panel_image"),
+        patient_id=patient_id,
+    )
 
 
 def update_preview(slice_idx: int, alpha: float, wl: float, ww: float) -> Image.Image | None:
@@ -241,6 +271,11 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
             preview_img = gr.Image(label="CT 슬라이스 (축상 / 시상 / 관상)", type="pil")
             answer_box = gr.Textbox(label="한국어 분석 결과", lines=3, interactive=False)
             volume_box = gr.Textbox(label="부피·크기 통계", lines=6, interactive=False)
+            clinical_box = gr.Textbox(label="임상 평가 (정상 범위 비교)", lines=8, interactive=False)
+            with gr.Row():
+                patient_id_input = gr.Textbox(label="환자 ID (선택)", placeholder="예: P-20240522", scale=2)
+                pdf_btn = gr.Button("📄 PDF 보고서 생성", scale=1)
+            pdf_output = gr.File(label="PDF 다운로드", visible=False)
 
     # ── 이벤트 연결 ───────────────────────────────────────────────────────────
     file_input.change(
@@ -252,7 +287,13 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
     run_btn.click(
         fn=run_inference,
         inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider],
-        outputs=[preview_img, volume_box, answer_box],
+        outputs=[preview_img, volume_box, answer_box, clinical_box],
+    )
+
+    pdf_btn.click(
+        fn=lambda pid: (generate_pdf_report(pid), gr.File(visible=True)),
+        inputs=[patient_id_input],
+        outputs=[pdf_output, pdf_output],
     )
 
     for slider in [slice_slider, alpha_slider, wl_slider, ww_slider]:
