@@ -24,6 +24,26 @@ from src.translation.medical_terms import get_korean_term
 from app.visualization import get_slice_views, make_panel, _LABEL_COLORS
 
 
+# ── Colab 한국어 폰트 자동 설치 ────────────────────────────────────────────────
+def _setup_korean_font() -> None:
+    """Colab 환경에서 fonts-nanum 자동 설치 (PDF 한국어 출력용)."""
+    _NANUM_PATH = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+    if os.path.exists(_NANUM_PATH):
+        return  # 이미 설치됨
+    if "google.colab" not in sys.modules:
+        return  # Colab 아님
+    import subprocess
+    print("📦 한국어 폰트 설치 중 (fonts-nanum)...")
+    subprocess.run(["apt-get", "install", "-y", "fonts-nanum", "-q"], check=False)
+    if os.path.exists(_NANUM_PATH):
+        print("✅ 한국어 폰트 설치 완료 — PDF에서 한국어가 출력됩니다.")
+    else:
+        print("⚠️  폰트 설치 실패 — PDF는 영문으로 출력됩니다.")
+
+
+_setup_korean_font()
+
+
 # ── 전역 상태 ──────────────────────────────────────────────────────────────────
 _pipeline: SegmentationPipeline | None = None
 _translator = MedicalTranslator()
@@ -33,50 +53,7 @@ _last_inference: dict = {}
 
 
 # ── 테마 ──────────────────────────────────────────────────────────────────────
-_THEME = gr.themes.Soft(
-    primary_hue=gr.themes.colors.blue,
-    secondary_hue=gr.themes.colors.sky,
-    neutral_hue=gr.themes.colors.slate,
-).set(
-    body_background_fill="#0f172a",
-    body_background_fill_dark="#0f172a",
-    block_background_fill="#1e293b",
-    block_background_fill_dark="#1e293b",
-    block_border_color="#334155",
-    block_border_color_dark="#334155",
-    block_label_background_fill="#1e293b",
-    block_label_background_fill_dark="#1e293b",
-    block_label_text_color="#94a3b8",
-    block_label_text_color_dark="#94a3b8",
-    block_title_text_color="#e2e8f0",
-    block_title_text_color_dark="#e2e8f0",
-    body_text_color="#e2e8f0",
-    body_text_color_dark="#e2e8f0",
-    input_background_fill="#0f172a",
-    input_background_fill_dark="#0f172a",
-    input_border_color="#334155",
-    input_border_color_dark="#334155",
-    input_placeholder_color="#64748b",
-    button_primary_background_fill="#2563eb",
-    button_primary_background_fill_hover="#1d4ed8",
-    button_primary_background_fill_dark="#2563eb",
-    button_primary_text_color="white",
-    button_secondary_background_fill="#334155",
-    button_secondary_background_fill_dark="#334155",
-    button_secondary_text_color="#e2e8f0",
-    button_secondary_text_color_dark="#e2e8f0",
-    checkbox_background_color="#0f172a",
-    checkbox_background_color_dark="#0f172a",
-    accordion_text_color="#94a3b8",
-    accordion_text_color_dark="#94a3b8",
-    table_border_color="#334155",
-    table_row_focus="#1e3a5f",
-    slider_color="#2563eb",
-    tab_item_background_fill="#0f172a",
-    tab_item_background_fill_hover="#1e293b",
-    tab_item_selected_background_fill="#1e3a5f",
-    tab_item_selected_border_color="#2563eb",
-)
+_THEME = gr.themes.Soft()
 
 _CSS = """
 footer { display: none; }
