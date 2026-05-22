@@ -365,12 +365,17 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                 gr.Markdown(
                     "#### 🖼️ CT 슬라이스 뷰어 "
                     "<span style='color:#64748b;font-size:0.8rem;font-weight:400;'>"
-                    "시상/관상면 클릭 → 해당 깊이로 축상 슬라이스 이동</span>"
+                    "시상/관상면을 클릭하면 해당 깊이로 축상 슬라이스가 이동합니다</span>"
                 )
                 with gr.Row(equal_height=True):
-                    axial_img    = gr.Image(label="축상면 (Axial)",              type="pil", height=260)
-                    sagittal_img = gr.Image(label="시상면 (Sagittal) ← 클릭",   type="pil", height=260)
-                    coronal_img  = gr.Image(label="관상면 (Coronal) ← 클릭",    type="pil", height=260)
+                    axial_img    = gr.Image(show_label=False, type="pil", height=260, container=True)
+                    sagittal_img = gr.Image(show_label=False, type="pil", height=260, container=True)
+                    coronal_img  = gr.Image(show_label=False, type="pil", height=260, container=True)
+                # 뷰 이름 행 (이미지 아래)
+                with gr.Row():
+                    gr.HTML("<div style='text-align:center;color:#94a3b8;font-size:0.82rem;padding:2px 0;'>축상면 (Axial)</div>")
+                    gr.HTML("<div style='text-align:center;color:#94a3b8;font-size:0.82rem;padding:2px 0;'>시상면 (Sagittal) ← 클릭</div>")
+                    gr.HTML("<div style='text-align:center;color:#94a3b8;font-size:0.82rem;padding:2px 0;'>관상면 (Coronal) ← 클릭</div>")
                 legend_html = gr.HTML(value=_make_legend_html({}))
 
             gr.Markdown("---")
