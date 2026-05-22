@@ -1,7 +1,25 @@
 from __future__ import annotations
 
+import os
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+_FONT_CANDIDATES: list[str] = [
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "C:/Windows/Fonts/malgun.ttf",
+    "malgun.ttf",
+]
+
+
+def _load_font(size: int = 14) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in _FONT_CANDIDATES:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
 
 
 # 장기별 고정 색상표 (RGB). 인덱스 0은 배경(투명).
@@ -92,11 +110,7 @@ def _draw_legend(
     img_size: tuple[int, int],
 ) -> None:
     """이미지 우측 상단에 범례 삽입."""
-    try:
-        font = ImageFont.truetype("malgun.ttf", 14)
-    except OSError:
-        font = ImageFont.load_default()
-
+    font = _load_font(14)
     x, y = img_size[0] - 160, 8
     box_size = 12
     gap = 4
@@ -216,10 +230,7 @@ def make_panel(
     # 제목 텍스트 추가
     pil = Image.fromarray(panel)
     draw = ImageDraw.Draw(pil)
-    try:
-        font = ImageFont.truetype("malgun.ttf", 16)
-    except OSError:
-        font = ImageFont.load_default()
+    font = _load_font(16)
 
     x_offset = 0
     for i, plane in enumerate([p for p in order if p in views]):

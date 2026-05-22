@@ -29,11 +29,10 @@ from app.visualization import get_slice_views, make_panel
 _pipeline: SegmentationPipeline | None = None
 _translator = MedicalTranslator()
 
-# 현재 로드된 볼륨 (전역 캐시)
 _current_volume: np.ndarray | None = None
 _current_spacing: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
-# 마지막 추론 결과 (PDF 생성용)
+# 마지막 추론 결과 (슬라이더 갱신 + PDF 생성용)
 _last_inference: dict = {}
 
 
@@ -41,7 +40,6 @@ _last_inference: dict = {}
 def _get_pipeline() -> SegmentationPipeline:
     global _pipeline
     if _pipeline is None:
-        # Colab이면 4-bit, 로컬이면 기본 설정
         in_colab = "google.colab" in sys.modules
         config = get_colab_config() if in_colab else ModelConfig(precision="bf16")
         _pipeline = SegmentationPipeline(config)
@@ -49,13 +47,22 @@ def _get_pipeline() -> SegmentationPipeline:
     return _pipeline
 
 
+# ── 헬퍼 ──────────────────────────────────────────────────────────────────────
+def _views_to_pil(views: dict) -> tuple[Image.Image, Image.Image, Image.Image]:
+    return (
+        Image.fromarray(views["axial"]),
+        Image.fromarray(views["sagittal"]),
+        Image.fromarray(views["coronal"]),
+    )
+
+
 # ── 파일 로드 ─────────────────────────────────────────────────────────────────
-def load_file(file_obj) -> tuple[Image.Image | None, str]:
-    """업로드된 CT 파일을 로드하고 중앙 축상 슬라이스 미리보기를 반환."""
+def load_file(file_obj) -> tuple[Image.Image | None, Image.Image | None, Image.Image | None, str]:
+    """업로드된 CT 파일을 로드하고 3방향 슬라이스 미리보기를 반환."""
     global _current_volume, _current_spacing
 
     if file_obj is None:
-        return None, "파일을 업로드해주세요."
+        return None, None, None, "파일을 업로드해주세요."
 
     path: str = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
 
@@ -73,17 +80,19 @@ def load_file(file_obj) -> tuple[Image.Image | None, str]:
             _current_volume = arr[0] if arr.ndim == 4 else arr
             _current_spacing = (1.0, 1.0, 1.0)
         else:
-            return None, f"지원하지 않는 형식입니다: {os.path.basename(path)}\n(.nii.gz / .nii / .npy 만 가능)"
+            return None, None, None, f"지원하지 않는 형식입니다: {os.path.basename(path)}\n(.nii.gz / .nii / .npy 만 가능)"
 
         views = get_slice_views(_current_volume)
-        panel = make_panel(views)
-        preview = Image.fromarray(panel)
         D, H, W = _current_volume.shape
-        msg = f"로드 완료: {os.path.basename(path)} | 크기: {D}×{H}×{W} | 간격: {_current_spacing[0]:.2f}×{_current_spacing[1]:.2f}×{_current_spacing[2]:.2f} mm"
-        return preview, msg
+        msg = (
+            f"로드 완료: {os.path.basename(path)} | "
+            f"크기: {D}×{H}×{W} | "
+            f"간격: {_current_spacing[0]:.2f}×{_current_spacing[1]:.2f}×{_current_spacing[2]:.2f} mm"
+        )
+        return (*_views_to_pil(views), msg)
 
     except Exception as e:
-        return None, f"파일 로드 실패: {e}"
+        return None, None, None, f"파일 로드 실패: {e}"
 
 
 # ── 추론 ──────────────────────────────────────────────────────────────────────
@@ -93,45 +102,37 @@ def run_inference(
     alpha: float,
     wl: float,
     ww: float,
-) -> tuple[Image.Image | None, str, str]:
-    """
-    단일/복수 장기 세그멘테이션을 수행하고 결과를 반환.
-    "간이랑 신장 분할해줘" 처럼 여러 장기를 감지하면 각각 추론 후 합성.
-
-    Returns:
-        (panel_image, volume_report, answer_ko, clinical_text)
-    """
+) -> tuple[Image.Image | None, Image.Image | None, Image.Image | None, str, str, str]:
+    """단일/복수 장기 세그멘테이션 수행. 3방향 슬라이스 이미지 + 분석 텍스트 반환."""
     global _current_volume, _current_spacing, _last_inference
 
     if _current_volume is None:
-        return None, "", "먼저 CT 파일을 업로드해주세요.", ""
+        return None, None, None, "", "먼저 CT 파일을 업로드해주세요.", ""
     if not question_ko.strip():
-        return None, "", "질문을 입력해주세요.", ""
+        return None, None, None, "", "질문을 입력해주세요.", ""
 
     try:
         pipeline = _get_pipeline()
     except Exception as e:
-        return None, "", f"모델 로드 실패: {e}", ""
+        return None, None, None, "", f"모델 로드 실패: {e}", ""
 
     organs = _detect_organs_en(question_ko)
 
     # ── 장기별 추론 ──────────────────────────────────────────────────────────
     try:
         if not organs:
-            # 장기 미탐지 → 번역 폴백 단일 추론
             results = [pipeline.run(_current_volume, question_ko)]
             organs = [results[0]["organ_label"] or ""]
         else:
-            # 전처리는 한 번, 장기마다 추론 재사용
             image_pt, original = pipeline._prepare_image_pt(_current_volume)
             results = [
                 pipeline._infer(image_pt, original, org, question_ko)
                 for org in organs
             ]
     except Exception as e:
-        return None, "", f"추론 오류: {e}", ""
+        return None, None, None, "", f"추론 오류: {e}", ""
 
-    # ── 마스크 합성 (장기마다 다른 레이블 인덱스) ────────────────────────────
+    # ── 마스크 합성 ──────────────────────────────────────────────────────────
     vol_shape = _current_volume.shape
     combined_mask = np.zeros(vol_shape, dtype=np.uint8)
     label_names: dict[int, str] = {}
@@ -140,7 +141,7 @@ def run_inference(
             combined_mask[res["mask"]] = lbl_idx
         label_names[lbl_idx] = get_korean_term(org) if org else f"구조물 {lbl_idx}"
 
-    # ── 부피 통계 + 임상 평가 (장기별) ─────────────────────────────────────
+    # ── 부피 통계 + 임상 평가 ────────────────────────────────────────────────
     volume_lines: list[str] = []
     answer_lines: list[str] = []
     organ_results: list[dict] = []
@@ -158,9 +159,13 @@ def run_inference(
         assessments.append(assessment)
         organ_results.append({"label": org, "stats": stats, "assessment": assessment})
 
-        volume_lines.append(stats.summary_ko() if present else f"[{get_korean_term(org)}] 마스크가 감지되지 않았습니다.")
+        volume_lines.append(
+            stats.summary_ko() if present else f"[{get_korean_term(org)}] 마스크가 감지되지 않았습니다."
+        )
         answer_lines.append(
-            _translator.translate_segmentation_result(org, present=present, volume_ml=stats.volume_ml if present else None)
+            _translator.translate_segmentation_result(
+                org, present=present, volume_ml=stats.volume_ml if present else None
+            )
         )
 
     volume_report = "\n\n".join(volume_lines)
@@ -185,27 +190,25 @@ def run_inference(
         ww=ww,
         label_names=label_names,
     )
-    panel_arr = make_panel(views)
-    panel_img = Image.fromarray(panel_arr)
+    panel_arr = make_panel(views)  # PDF용 단일 패널 유지
 
-    # ── PDF 생성을 위한 상태 저장 ────────────────────────────────────────────
     _last_inference.update({
         "organ_results": organ_results,
         "panel_image": panel_arr,
         "patient_id": "",
+        "combined_mask": combined_mask,
+        "label_names": label_names,
     })
 
-    return panel_img, volume_report, answer_ko, clinical_text
+    return (*_views_to_pil(views), volume_report, answer_ko, clinical_text)
 
 
 def _best_slice_index(mask: np.ndarray) -> int:
-    """마스크 면적이 가장 큰 축상 슬라이스 인덱스."""
     counts = mask.sum(axis=(1, 2))
     return int(np.argmax(counts))
 
 
 def generate_pdf_report(patient_id: str = "") -> str | None:
-    """마지막 추론 결과로 PDF 보고서를 생성하고 파일 경로 반환."""
     if not _last_inference.get("organ_results"):
         return None
     _last_inference["patient_id"] = patient_id
@@ -216,14 +219,47 @@ def generate_pdf_report(patient_id: str = "") -> str | None:
     )
 
 
-def update_preview(slice_idx: int, alpha: float, wl: float, ww: float) -> Image.Image | None:
-    """슬라이더 변경 시 마스크 없이 미리보기 갱신."""
+def update_preview(
+    slice_idx: int, alpha: float, wl: float, ww: float
+) -> tuple[Image.Image | None, Image.Image | None, Image.Image | None]:
+    """슬라이더 변경 시 저장된 마스크와 함께 3방향 뷰 갱신."""
     if _current_volume is None:
-        return None
+        return None, None, None
     D = _current_volume.shape[0]
     idx = max(0, min(int(slice_idx), D - 1))
-    views = get_slice_views(_current_volume, slice_indices={"axial": idx, "sagittal": _current_volume.shape[2] // 2, "coronal": _current_volume.shape[1] // 2}, wl=wl, ww=ww)
-    return Image.fromarray(make_panel(views))
+    combined_mask = _last_inference.get("combined_mask")
+    label_names = _last_inference.get("label_names") if combined_mask is not None else None
+    views = get_slice_views(
+        _current_volume,
+        combined_mask,
+        slice_indices={
+            "axial": idx,
+            "sagittal": _current_volume.shape[2] // 2,
+            "coronal": _current_volume.shape[1] // 2,
+        },
+        wl=wl,
+        ww=ww,
+        alpha=alpha,
+        label_names=label_names,
+    )
+    return _views_to_pil(views)
+
+
+# ── 클릭 네비게이션 ───────────────────────────────────────────────────────────
+def on_sagittal_click(evt: gr.SelectData) -> int:
+    """시상면 클릭 → y좌표를 축상 슬라이스 인덱스로 변환."""
+    if _current_volume is None:
+        return 0
+    D = _current_volume.shape[0]
+    return max(0, min(int(evt.index[1] / 256 * D), D - 1))
+
+
+def on_coronal_click(evt: gr.SelectData) -> int:
+    """관상면 클릭 → y좌표를 축상 슬라이스 인덱스로 변환."""
+    if _current_volume is None:
+        return 0
+    D = _current_volume.shape[0]
+    return max(0, min(int(evt.index[1] / 256 * D), D - 1))
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -257,7 +293,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
             gr.Examples(examples=EXAMPLES_Q, inputs=[question_input], label="예시 질문")
 
             with gr.Accordion("시각화 설정", open=False):
-                slice_slider = gr.Slider(0, 31, value=0, step=1, label="축상 슬라이스 번호 (-1=자동)")
+                slice_slider = gr.Slider(0, 31, value=0, step=1, label="축상 슬라이스 번호 (0=자동)")
                 alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
                 wl_slider = gr.Slider(-200, 400, value=40, step=10, label="윈도우 레벨 (HU)")
                 ww_slider = gr.Slider(100, 2000, value=400, step=50, label="윈도우 너비 (HU)")
@@ -268,12 +304,18 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
 
         # ── 오른쪽: 출력 패널 ─────────────────────────────────────────────
         with gr.Column(scale=2):
-            preview_img = gr.Image(label="CT 슬라이스 (축상 / 시상 / 관상)", type="pil")
+            gr.Markdown("**CT 슬라이스** — 시상/관상 뷰를 클릭하면 해당 깊이로 축상 슬라이스가 이동합니다")
+            with gr.Row():
+                axial_img = gr.Image(label="축상면 (Axial)", type="pil")
+                sagittal_img = gr.Image(label="시상면 (Sagittal) ← 클릭", type="pil")
+                coronal_img = gr.Image(label="관상면 (Coronal) ← 클릭", type="pil")
             answer_box = gr.Textbox(label="한국어 분석 결과", lines=3, interactive=False)
             volume_box = gr.Textbox(label="부피·크기 통계", lines=6, interactive=False)
             clinical_box = gr.Textbox(label="임상 평가 (정상 범위 비교)", lines=8, interactive=False)
             with gr.Row():
-                patient_id_input = gr.Textbox(label="환자 ID (선택)", placeholder="예: P-20240522", scale=2)
+                patient_id_input = gr.Textbox(
+                    label="환자 ID (선택)", placeholder="예: P-20240522", scale=2
+                )
                 pdf_btn = gr.Button("📄 PDF 보고서 생성", scale=1)
             pdf_output = gr.File(label="PDF 다운로드", visible=False)
 
@@ -281,13 +323,13 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
     file_input.change(
         fn=load_file,
         inputs=[file_input],
-        outputs=[preview_img, load_status],
+        outputs=[axial_img, sagittal_img, coronal_img, load_status],
     )
 
     run_btn.click(
         fn=run_inference,
         inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider],
-        outputs=[preview_img, volume_box, answer_box, clinical_box],
+        outputs=[axial_img, sagittal_img, coronal_img, volume_box, answer_box, clinical_box],
     )
 
     pdf_btn.click(
@@ -300,8 +342,28 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=gr.themes.Soft()) as demo:
         slider.change(
             fn=update_preview,
             inputs=[slice_slider, alpha_slider, wl_slider, ww_slider],
-            outputs=[preview_img],
+            outputs=[axial_img, sagittal_img, coronal_img],
         )
+
+    # 시상면 클릭 → 축상 슬라이스 업데이트
+    sagittal_img.select(
+        fn=on_sagittal_click,
+        outputs=[slice_slider],
+    ).then(
+        fn=update_preview,
+        inputs=[slice_slider, alpha_slider, wl_slider, ww_slider],
+        outputs=[axial_img, sagittal_img, coronal_img],
+    )
+
+    # 관상면 클릭 → 축상 슬라이스 업데이트
+    coronal_img.select(
+        fn=on_coronal_click,
+        outputs=[slice_slider],
+    ).then(
+        fn=update_preview,
+        inputs=[slice_slider, alpha_slider, wl_slider, ww_slider],
+        outputs=[axial_img, sagittal_img, coronal_img],
+    )
 
 
 if __name__ == "__main__":
