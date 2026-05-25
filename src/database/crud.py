@@ -50,12 +50,13 @@ def save_exam(
     exam_date: str,
     age: int,
     organ_results: list[dict],
+    notes: str = "",
 ) -> int:
     """검사 + 장기 결과 저장, exam_id 반환."""
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO exams (patient_id, exam_date, age_at_exam) VALUES (?, ?, ?)",
-            (patient_id, exam_date, age),
+            "INSERT INTO exams (patient_id, exam_date, age_at_exam, notes) VALUES (?, ?, ?, ?)",
+            (patient_id, exam_date, age, notes.strip()),
         )
         exam_id = cur.lastrowid
         for r in organ_results:
