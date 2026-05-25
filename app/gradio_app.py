@@ -746,10 +746,11 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             exams_state = gr.State([])
 
             with gr.Row():
-                refresh_hist_btn  = gr.Button("🔄 새로고침", variant="secondary", scale=1)
-                export_all_btn    = gr.Button("📊 전체 CSV", variant="secondary", scale=1)
+                refresh_hist_btn   = gr.Button("🔄 새로고침", variant="secondary", scale=1)
+                export_all_btn     = gr.Button("📊 전체 CSV", variant="secondary", scale=1)
                 export_patient_btn = gr.Button("📊 환자별 CSV", variant="secondary", scale=1)
-                gr.HTML("<div></div>", scale=2)
+                with gr.Column(scale=2):
+                    pass
 
             exams_df = gr.Dataframe(
                 headers=["ID", "환자명", "성별", "검사일", "나이", "분석일시", "장기"],
