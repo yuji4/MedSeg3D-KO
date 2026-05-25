@@ -101,15 +101,32 @@ footer { display: none; }
 /* 섹션 간격 */
 .section-gap { margin-top: 16px; }
 
-/* 데이터프레임 텍스트 강제 적용 */
-.gr-dataframe table, .gr-dataframe td, .gr-dataframe th,
-table td, table th {
-    color: #e2e8f0 !important;
+/* ── 데이터프레임 ── */
+/* Gradio 4.x: .table-wrap 안의 table */
+.table-wrap table { border-collapse: collapse; width: 100%; }
+.table-wrap thead tr,
+.table-wrap thead tr th {
+    background: #0f172a !important;
+    color: #94a3b8 !important;
+    border-color: #334155 !important;
 }
-table thead tr { background: #0f172a !important; }
-table tbody tr:nth-child(even) { background: #1a2744 !important; }
-table tbody tr:nth-child(odd)  { background: #1e293b !important; }
-table td, table th { border-color: #334155 !important; }
+.table-wrap tbody tr:nth-child(odd)  td { background: #1e293b !important; color: #e2e8f0 !important; }
+.table-wrap tbody tr:nth-child(even) td { background: #1a2744 !important; color: #e2e8f0 !important; }
+.table-wrap td, .table-wrap th { border-color: #334155 !important; padding: 6px 10px !important; }
+/* 혹시 bare table 도 커버 */
+table:not(.options) thead tr th { background: #0f172a !important; color: #94a3b8 !important; }
+table:not(.options) tbody tr:nth-child(odd)  td { background: #1e293b !important; color: #e2e8f0 !important; }
+table:not(.options) tbody tr:nth-child(even) td { background: #1a2744 !important; color: #e2e8f0 !important; }
+
+/* ── 드롭다운 팝업 ── */
+/* Gradio 4.x 드롭다운 옵션 리스트 */
+ul.options                { background: #1e293b !important; border: 1px solid #334155 !important; }
+ul.options li.item        { color: #e2e8f0 !important; }
+ul.options li.item:hover  { background: #334155 !important; color: #ffffff !important; }
+ul.options li.item.active { background: #2563eb !important; color: #ffffff !important; }
+/* 선택된 값 표시 영역 */
+.wrap-inner span, .svelte-select .value-container { color: #e2e8f0 !important; }
+.token                    { background: #334155 !important; color: #e2e8f0 !important; }
 """
 
 
