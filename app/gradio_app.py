@@ -57,6 +57,35 @@ _SEX_MAP = {"남성": "male", "여성": "female", "미입력": "unknown"}
 _SEX_KO  = {"male": "남성", "female": "여성", "unknown": "미입력"}
 
 
+# ── 주민등록번호 파싱 ──────────────────────────────────────────────────────────
+def _parse_rrn(rrn: str) -> dict | None:
+    """주민등록번호 → {age, sex, birth_year}. 형식 불일치 시 None."""
+    import re
+    clean = re.sub(r"[\s\-]", "", rrn)
+    if len(clean) != 13 or not clean.isdigit():
+        return None
+    yy, g = int(clean[:2]), int(clean[6])
+    if g in (1, 2, 5, 6):
+        year = 1900 + yy
+    elif g in (3, 4, 7, 8):
+        year = 2000 + yy
+    elif g in (9, 0):
+        year = 1800 + yy
+    else:
+        return None
+    return {
+        "birth_year": year,
+        "age": datetime.now().year - year,
+        "sex": "male" if g % 2 == 1 else "female",
+    }
+
+
+def _mask_rrn(rrn: str) -> str:
+    """뒷자리 마스킹: 000000-*"""
+    clean = rrn.replace("-", "").replace(" ", "")
+    return f"{clean[:6]}-*******" if len(clean) == 13 else ""
+
+
 # ── 테마 / CSS ─────────────────────────────────────────────────────────────────
 _THEME = gr.themes.Soft(
     primary_hue=gr.themes.colors.blue,
@@ -376,8 +405,17 @@ def load_file(file_obj, patient_name, exam_date):
 
 
 # ── 추론 ──────────────────────────────────────────────────────────────────────
+def on_rrn_change(rrn: str):
+    """주민등록번호 입력 시 나이·성별 자동 채우기."""
+    parsed = _parse_rrn(rrn)
+    if parsed:
+        sex_ko = _SEX_KO.get(parsed["sex"], "미입력")
+        return parsed["age"], sex_ko
+    return gr.update(), gr.update()
+
+
 def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
-                  age, sex_ko, patient_name, exam_date, doctor_notes):
+                  age, sex_ko, patient_name, exam_date, doctor_notes, rrn):
     global _current_volume, _current_spacing, _last_inference
 
     _hdr = lambda s: _make_header_html(patient_name, exam_date, s)
@@ -455,7 +493,10 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
 
     # DB 저장
     try:
-        pid = upsert_patient(patient_name or "미입력", sex)
+        parsed = _parse_rrn(rrn or "")
+        birth_year = parsed["birth_year"] if parsed else None
+        pid = upsert_patient(patient_name or "미입력", sex,
+                             rrn=rrn or "", birth_year=birth_year)
         save_exam(pid,
                   exam_date or datetime.now().strftime("%Y-%m-%d"),
                   int(age), organ_results, notes=doctor_notes or "")
@@ -556,10 +597,12 @@ def on_exam_select_fn(evt: gr.SelectData, exams: list) -> tuple:
             f"border-radius:6px;color:#93c5fd;font-size:0.83rem;'>"
             f"📝 의사 메모: {exam['notes']}</div>"
         )
+    rrn_str = _mask_rrn(exam.get("rrn") or "")
+    rrn_html = f" | {rrn_str}" if rrn_str else ""
     detail_html = (
         f"<div style='color:#94a3b8;font-size:0.83rem;padding:6px 10px;"
         f"background:#0f172a;border-radius:6px;margin-bottom:8px;'>"
-        f"👤 {exam.get('patient_name','-')} | "
+        f"👤 {exam.get('patient_name','-')}{rrn_html} | "
         f"검사일: {exam.get('exam_date','-')} | "
         f"{exam.get('age_at_exam','-')}세 | "
         f"분석: {str(exam.get('analyzed_at',''))[:16].replace('T',' ')}"
@@ -632,7 +675,14 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                     with gr.Group():
                         gr.Markdown("#### 👤 환자 정보")
                         patient_name_input = gr.Textbox(
-                            label="환자 이름", placeholder="홍길동 (선택)", lines=1,
+                            label="환자 이름", placeholder="홍길동", lines=1,
+                        )
+                        rrn_input = gr.Textbox(
+                            label="주민등록번호",
+                            placeholder="000000-0000000",
+                            lines=1,
+                            type="password",
+                            info="입력 시 나이·성별 자동 입력 / 환자 고유 식별자",
                         )
                         exam_date_input = gr.Textbox(
                             label="검사일 (YYYY-MM-DD)",
@@ -704,7 +754,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                         )
                         run_btn   = gr.Button("🔬 실행", variant="primary", scale=1)
                         clear_btn = gr.ClearButton(
-                            [file_input, question_input, doctor_notes_input],
+                            [file_input, question_input, rrn_input, doctor_notes_input],
                             value="🗑️ 초기화", scale=1,
                         )
 
@@ -748,6 +798,13 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             _VIEW_OUT = [axial_img, sagittal_img, coronal_img]
             _CTRL_IN  = [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]
 
+            # RRN 입력 → 나이/성별 자동 채우기
+            rrn_input.change(
+                fn=on_rrn_change,
+                inputs=[rrn_input],
+                outputs=[age_input, sex_input],
+            )
+
             file_input.change(
                 fn=load_file,
                 inputs=[file_input, patient_name_input, exam_date_input],
@@ -763,7 +820,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                 fn=run_inference,
                 inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
                         mask_toggle, age_input, sex_input,
-                        patient_name_input, exam_date_input, doctor_notes_input],
+                        patient_name_input, exam_date_input, doctor_notes_input, rrn_input],
                 outputs=_RUN_OUT,
             )
             pdf_btn.click(

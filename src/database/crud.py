@@ -8,23 +8,42 @@ from src.database.db import get_conn
 
 # ── 환자 ──────────────────────────────────────────────────────────────────────
 
-def upsert_patient(name: str, sex: str, birth_year: int | None = None) -> int:
-    """같은 이름의 환자가 있으면 ID 반환, 없으면 새로 생성."""
+def upsert_patient(
+    name: str,
+    sex: str,
+    rrn: str = "",
+    birth_year: int | None = None,
+) -> int:
+    """RRN 우선 조회, 없으면 이름 조회, 둘 다 없으면 신규 등록."""
     name = name.strip() or "미입력"
+    rrn_clean = rrn.replace("-", "").replace(" ", "") if rrn else ""
+
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT id FROM patients WHERE name = ?", (name,)
-        ).fetchone()
+        row = None
+        if rrn_clean:
+            row = conn.execute(
+                "SELECT id FROM patients WHERE rrn = ?", (rrn_clean,)
+            ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT id FROM patients WHERE name = ?", (name,)
+            ).fetchone()
+
         if row:
             conn.execute(
-                "UPDATE patients SET sex = ? WHERE id = ?",
-                (sex, row["id"]),
+                """UPDATE patients
+                   SET name = ?, sex = ?,
+                       rrn = COALESCE(NULLIF(?, ''), rrn),
+                       birth_year = COALESCE(?, birth_year)
+                   WHERE id = ?""",
+                (name, sex, rrn_clean, birth_year, row["id"]),
             )
             conn.commit()
             return row["id"]
+
         cur = conn.execute(
-            "INSERT INTO patients (name, sex, birth_year) VALUES (?, ?, ?)",
-            (name, sex, birth_year),
+            "INSERT INTO patients (name, sex, rrn, birth_year) VALUES (?, ?, ?, ?)",
+            (name, sex, rrn_clean or None, birth_year),
         )
         conn.commit()
         return cur.lastrowid
@@ -83,8 +102,8 @@ def list_all_exams() -> list[dict]:
     """모든 검사 목록 (최신순)."""
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT e.id, p.name AS patient_name, p.sex,
-                      e.exam_date, e.age_at_exam, e.analyzed_at,
+            """SELECT e.id, p.name AS patient_name, p.sex, p.rrn,
+                      e.exam_date, e.age_at_exam, e.analyzed_at, e.notes,
                       COUNT(o.id) AS n_organs,
                       SUM(CASE WHEN o.status IN ('high','low') THEN 1 ELSE 0 END) AS n_abnormal
                FROM exams e

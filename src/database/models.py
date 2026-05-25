@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS patients (
     name       TEXT    NOT NULL,
     sex        TEXT    DEFAULT 'unknown',
     birth_year INTEGER,
+    rrn        TEXT    UNIQUE,
     created_at TEXT    DEFAULT (datetime('now', 'localtime'))
 )"""
 
