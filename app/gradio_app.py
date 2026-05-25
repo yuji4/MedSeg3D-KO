@@ -18,6 +18,7 @@ from src.inference.model_loader import ModelConfig, get_colab_config
 from src.inference.segmentation import SegmentationPipeline, _detect_organs_en
 from src.analysis.volume import analyze_mask
 from src.analysis.clinical import assess_organ, format_clinical_summary
+from src.analysis.records import save_record, list_records, export_records_csv
 from src.analysis.report import generate_report
 from src.translation.translator import MedicalTranslator
 from src.translation.medical_terms import get_korean_term
@@ -158,7 +159,6 @@ def _make_results_html(assessments: list) -> str:
         "normal":  "✓ 정상",
         "unknown": "참고범위없음",
     }
-    # 이상 소견 우선 정렬
     ordered = (
         [a for a in assessments if a.status in ("high", "low")] +
         [a for a in assessments if a.status == "normal"] +
@@ -188,6 +188,78 @@ def _make_results_html(assessments: list) -> str:
   </div>
 </div>""")
     return "<div>" + "".join(cards) + "</div>"
+
+
+# ── 환자 기록 헬퍼 ─────────────────────────────────────────────────────────────
+def _records_to_df_data(records: list[dict]) -> list[list]:
+    rows = []
+    for r in records:
+        n = len(r.get("organs", []))
+        ab = sum(1 for o in r.get("organs", []) if o.get("status") in ("high", "low"))
+        sex_ko = {"male": "남성", "female": "여성"}.get(r.get("sex", ""), "미입력")
+        rows.append([
+            r.get("patient_name", "-") or "-",
+            r.get("exam_date", "-"),
+            str(r.get("age", "-")),
+            sex_ko,
+            r.get("analyzed_at", "")[:16].replace("T", " "),
+            f"{n}개" + (f" (이상 {ab})" if ab else ""),
+        ])
+    return rows
+
+
+def _make_record_detail_html(rec: dict) -> str:
+    _COLOR = {
+        "high":    ("#ef4444", "#3f0c0c"),
+        "low":     ("#f97316", "#3f1a08"),
+        "normal":  ("#22c55e", "#052e16"),
+        "unknown": ("#64748b", "#1e293b"),
+    }
+    _BADGE = {"high": "↑ 정상 초과", "low": "↓ 정상 미만",
+              "normal": "✓ 정상", "unknown": "참고범위없음"}
+    sex_ko = {"male": "남성", "female": "여성"}.get(rec.get("sex", ""), "미입력")
+    hdr = (
+        f"<div style='margin-bottom:10px;color:#94a3b8;font-size:0.85rem;"
+        f"padding:8px 12px;background:#0f172a;border-radius:6px;'>"
+        f"👤 {rec.get('patient_name','미입력') or '미입력'} &nbsp;|&nbsp; "
+        f"검사일: {rec.get('exam_date','-')} &nbsp;|&nbsp; "
+        f"{rec.get('age','-')}세 / {sex_ko} &nbsp;|&nbsp; "
+        f"분석: {rec.get('analyzed_at','')[:16].replace('T',' ')}"
+        f"</div>"
+    )
+    organs = rec.get("organs", [])
+    ordered = (
+        [o for o in organs if o.get("status") in ("high", "low")] +
+        [o for o in organs if o.get("status") == "normal"] +
+        [o for o in organs if o.get("status") == "unknown"]
+    )
+    cards = []
+    for o in ordered:
+        st = o.get("status", "unknown")
+        border, badge_bg = _COLOR.get(st, _COLOR["unknown"])
+        badge = _BADGE.get(st, "—")
+        lo, hi = o.get("range_lo"), o.get("range_hi")
+        range_str = f"{lo:.0f}~{hi:.0f} mL" if (lo is not None and hi is not None) else "기준 없음"
+        note = o.get("note", "")
+        note_html = (f" <span style='color:#64748b;font-size:0.74rem;'>({note})</span>"
+                     if note else "")
+        cards.append(f"""
+<div style="background:#1e293b;border-radius:8px;padding:10px 13px;margin-bottom:6px;
+            border:1px solid #334155;border-left:4px solid {border};">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+    <span style="color:#e2e8f0;font-weight:600;font-size:0.9rem;">{get_korean_term(o.get('label',''))}</span>
+    <span style="background:{badge_bg};color:{border};border:1px solid {border};
+                 padding:1px 8px;border-radius:10px;font-size:0.71rem;font-weight:700;">{badge}</span>
+  </div>
+  <div style="color:#94a3b8;font-size:0.82rem;">
+    측정: <b style="color:#e2e8f0;">{o.get('volume_ml', 0):.1f} mL</b>
+    &nbsp;|&nbsp; 정상범위: <span style="color:#cbd5e1;">{range_str}</span>{note_html}
+  </div>
+</div>""")
+    body = ("<div>" + "".join(cards) + "</div>") if cards else (
+        "<div style='color:#475569;padding:16px;'>장기 데이터 없음</div>"
+    )
+    return hdr + body
 
 
 # ── 초기화 ────────────────────────────────────────────────────────────────────
@@ -271,7 +343,6 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
     except Exception as e:
         return (*_blank, _hdr("loaded"), "", f"추론 오류: {e}")
 
-    # 마스크 합성
     combined_mask = np.zeros(_current_volume.shape, dtype=np.uint8)
     label_names: dict[int, str] = {}
     for lbl_idx, (org, res) in enumerate(zip(organs, results), start=1):
@@ -321,6 +392,12 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         "combined_mask": combined_mask,
         "label_names": label_names,
     })
+
+    # 분석 결과 자동 저장
+    try:
+        save_record(patient_name, "", exam_date, int(age), sex, organ_results)
+    except Exception:
+        pass
 
     return (
         *_views_to_pil(views),
@@ -379,6 +456,25 @@ def on_coronal_click(evt: gr.SelectData) -> int:
     return max(0, min(int(evt.index[1] / 256 * D), D - 1))
 
 
+# ── 환자 기록 이벤트 핸들러 ────────────────────────────────────────────────────
+def refresh_records_fn():
+    recs = list_records()
+    return _records_to_df_data(recs), recs
+
+
+def show_record_detail_fn(evt: gr.SelectData, recs: list) -> str:
+    if not recs or evt.index[0] >= len(recs):
+        return "<div style='color:#475569;padding:16px;'>선택된 기록 없음</div>"
+    return _make_record_detail_html(recs[evt.index[0]])
+
+
+def export_csv_fn(recs: list):
+    if not recs:
+        return gr.update(visible=False)
+    path = export_records_csv(recs)
+    return gr.update(value=path, visible=True)
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 EXAMPLES_Q = [
     "간을 분할해줘", "비장을 세그멘테이션해줘", "좌측 폐를 분할해줘",
@@ -387,162 +483,204 @@ EXAMPLES_Q = [
 
 with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
 
-    # ━━ 헤더 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    header_html = gr.HTML(value=_make_header_html())
+    with gr.Tabs():
 
-    # ━━ 메인 3열 레이아웃 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    with gr.Row(equal_height=False):
+        # ━━ 분석 탭 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        with gr.Tab("🔬 분석"):
 
-        # ── 좌측 사이드바 ─────────────────────────────────────────────────────
-        with gr.Column(scale=1, min_width=270):
+            header_html = gr.HTML(value=_make_header_html())
 
-            with gr.Group():
-                gr.Markdown("#### 👤 환자 정보")
-                patient_name_input = gr.Textbox(
-                    label="환자 이름", placeholder="홍길동 (선택)", lines=1,
-                )
-                exam_date_input = gr.Textbox(
-                    label="검사일",
-                    placeholder=datetime.now().strftime("%Y-%m-%d"),
-                    lines=1,
-                )
-                with gr.Row():
-                    age_input = gr.Number(
-                        label="나이 (세)", value=30, minimum=0, maximum=120, step=1,
+            with gr.Row(equal_height=False):
+
+                # ── 좌측 사이드바 ───────────────────────────────────────────────
+                with gr.Column(scale=1, min_width=270):
+
+                    with gr.Group():
+                        gr.Markdown("#### 👤 환자 정보")
+                        patient_name_input = gr.Textbox(
+                            label="환자 이름", placeholder="홍길동 (선택)", lines=1,
+                        )
+                        exam_date_input = gr.Textbox(
+                            label="검사일",
+                            placeholder=datetime.now().strftime("%Y-%m-%d"),
+                            lines=1,
+                        )
+                        with gr.Row():
+                            age_input = gr.Number(
+                                label="나이 (세)", value=30, minimum=0, maximum=120, step=1,
+                            )
+                            sex_input = gr.Radio(
+                                ["남성", "여성", "미입력"], label="성별", value="미입력",
+                            )
+
+                    gr.Markdown("---")
+
+                    with gr.Group():
+                        gr.Markdown("#### 📂 CT 파일 업로드")
+                        file_input = gr.File(
+                            label="파일 선택 (.nii.gz / .nii / .npy)",
+                            file_types=[".nii", ".gz", ".npy"],
+                        )
+                        load_status = gr.Textbox(
+                            label="로드 상태", interactive=False, lines=2,
+                        )
+
+                # ── 중앙: CT 뷰어 ──────────────────────────────────────────────
+                with gr.Column(scale=3):
+
+                    with gr.Group():
+                        with gr.Row(equal_height=True):
+                            axial_img    = gr.Image(show_label=False, type="pil", height=260)
+                            sagittal_img = gr.Image(show_label=False, type="pil", height=260)
+                            coronal_img  = gr.Image(show_label=False, type="pil", height=260)
+                        with gr.Row():
+                            gr.HTML("<div class='view-label'>축상면 (Axial)</div>")
+                            gr.HTML("<div class='view-label'>시상면 (Sagittal) ← 클릭</div>")
+                            gr.HTML("<div class='view-label'>관상면 (Coronal) ← 클릭</div>")
+                        legend_html = gr.HTML(value=_make_legend_html({}))
+
+                    gr.Markdown("---")
+
+                    with gr.Group():
+                        gr.Markdown("#### 🎛️ 뷰어 컨트롤")
+                        with gr.Row():
+                            mask_toggle = gr.Checkbox(
+                                label="마스크 오버레이", value=True, scale=1,
+                            )
+                            slice_slider = gr.Slider(
+                                0, 31, value=0, step=1, label="축상 슬라이스 (0=자동)", scale=3,
+                            )
+                        with gr.Row():
+                            wl_slider = gr.Slider(-200, 400, value=40, step=10, label="윈도우 레벨 (HU)")
+                            ww_slider = gr.Slider(100, 2000, value=400, step=50, label="윈도우 너비 (HU)")
+                        alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
+
+                # ── 우측: 결과 패널 ─────────────────────────────────────────────
+                with gr.Column(scale=2):
+
+                    gr.Markdown("#### 📊 장기별 분석 결과")
+                    results_html = gr.HTML(
+                        value=_make_results_html([]),
+                        elem_classes=["card-scroll"],
                     )
-                    sex_input = gr.Radio(
-                        ["남성", "여성", "미입력"], label="성별", value="미입력",
-                    )
+
+                    with gr.Accordion("📈 부피 상세 통계", open=False):
+                        volume_box = gr.Textbox(
+                            label=None, lines=6, interactive=False, show_copy_button=True,
+                            elem_id="volume_box",
+                        )
+
+                    with gr.Accordion("🩺 임상 소견 상세", open=False):
+                        clinical_box = gr.Textbox(
+                            label=None, lines=8, interactive=False, show_copy_button=True,
+                            elem_id="clinical_box",
+                        )
 
             gr.Markdown("---")
-
-            with gr.Group():
-                gr.Markdown("#### 📂 CT 파일 업로드")
-                file_input = gr.File(
-                    label="파일 선택 (.nii.gz / .nii / .npy)",
-                    file_types=[".nii", ".gz", ".npy"],
+            with gr.Row():
+                question_input = gr.Textbox(
+                    label="한국어 질문",
+                    placeholder="예: 간을 분할해줘  /  신장이랑 비장 찾아줘",
+                    lines=1, scale=4,
                 )
-                load_status = gr.Textbox(
-                    label="로드 상태", interactive=False, lines=2,
+                run_btn   = gr.Button("🔬 세그멘테이션 실행", variant="primary", scale=1)
+                clear_btn = gr.ClearButton([file_input, question_input], value="🗑️ 초기화", scale=1)
+
+            gr.Examples(examples=EXAMPLES_Q, inputs=[question_input], label="예시 질문")
+
+            with gr.Row():
+                patient_id_input = gr.Textbox(
+                    label="환자 ID (PDF용)", placeholder="P-20240522", scale=3,
                 )
+                pdf_btn = gr.Button("📄 PDF 보고서 생성", variant="secondary", scale=1)
+            pdf_status = gr.Textbox(label="PDF 상태", interactive=False, lines=1)
+            pdf_output = gr.File(label="📥 PDF 다운로드")
 
-        # ── 중앙: CT 뷰어 ─────────────────────────────────────────────────────
-        with gr.Column(scale=3):
+            # ── 이벤트 연결 ─────────────────────────────────────────────────────
 
-            with gr.Group():
-                with gr.Row(equal_height=True):
-                    axial_img    = gr.Image(show_label=False, type="pil", height=260)
-                    sagittal_img = gr.Image(show_label=False, type="pil", height=260)
-                    coronal_img  = gr.Image(show_label=False, type="pil", height=260)
-                with gr.Row():
-                    gr.HTML("<div class='view-label'>축상면 (Axial)</div>")
-                    gr.HTML("<div class='view-label'>시상면 (Sagittal) ← 클릭</div>")
-                    gr.HTML("<div class='view-label'>관상면 (Coronal) ← 클릭</div>")
-                legend_html = gr.HTML(value=_make_legend_html({}))
+            _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
+            _RUN_OUT  = [axial_img, sagittal_img, coronal_img,
+                         legend_html, results_html, header_html,
+                         volume_box, clinical_box]
+            _VIEW_OUT = [axial_img, sagittal_img, coronal_img]
+            _CTRL_IN  = [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]
 
-            gr.Markdown("---")
-
-            with gr.Group():
-                gr.Markdown("#### 🎛️ 뷰어 컨트롤")
-                with gr.Row():
-                    mask_toggle = gr.Checkbox(
-                        label="마스크 오버레이", value=True, scale=1,
-                    )
-                    slice_slider = gr.Slider(
-                        0, 31, value=0, step=1, label="축상 슬라이스 (0=자동)", scale=3,
-                    )
-                with gr.Row():
-                    wl_slider = gr.Slider(-200, 400, value=40, step=10, label="윈도우 레벨 (HU)")
-                    ww_slider = gr.Slider(100, 2000, value=400, step=50, label="윈도우 너비 (HU)")
-                alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
-
-        # ── 우측: 결과 패널 ───────────────────────────────────────────────────
-        with gr.Column(scale=2):
-
-            gr.Markdown("#### 📊 장기별 분석 결과")
-            results_html = gr.HTML(
-                value=_make_results_html([]),
-                elem_classes=["card-scroll"],
+            file_input.change(
+                fn=load_file,
+                inputs=[file_input, patient_name_input, exam_date_input],
+                outputs=_LOAD_OUT,
             )
 
-            with gr.Accordion("📈 부피 상세 통계", open=False):
-                volume_box = gr.Textbox(
-                    label=None, lines=6, interactive=False, show_copy_button=True,
-                    elem_id="volume_box",
+            for inp in [patient_name_input, exam_date_input]:
+                inp.change(
+                    fn=lambda n, d: _make_header_html(n, d, "idle"),
+                    inputs=[patient_name_input, exam_date_input],
+                    outputs=[header_html],
                 )
 
-            with gr.Accordion("🩺 임상 소견 상세", open=False):
-                clinical_box = gr.Textbox(
-                    label=None, lines=8, interactive=False, show_copy_button=True,
-                    elem_id="clinical_box",
-                )
+            run_btn.click(
+                fn=run_inference,
+                inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
+                        mask_toggle, age_input, sex_input, patient_name_input, exam_date_input],
+                outputs=_RUN_OUT,
+            )
 
-    # ━━ 액션 바 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    gr.Markdown("---")
-    with gr.Row():
-        question_input = gr.Textbox(
-            label="한국어 질문",
-            placeholder="예: 간을 분할해줘  /  신장이랑 비장 찾아줘",
-            lines=1, scale=4,
-        )
-        run_btn  = gr.Button("🔬 세그멘테이션 실행", variant="primary", scale=1)
-        clear_btn = gr.ClearButton([file_input, question_input], value="🗑️ 초기화", scale=1)
+            pdf_btn.click(
+                fn=generate_pdf_report,
+                inputs=[patient_id_input],
+                outputs=[pdf_output, pdf_status],
+            )
 
-    gr.Examples(examples=EXAMPLES_Q, inputs=[question_input], label="예시 질문")
+            for ctrl in [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]:
+                ctrl.change(fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT)
 
-    with gr.Row():
-        patient_id_input = gr.Textbox(
-            label="환자 ID (PDF용)", placeholder="P-20240522", scale=3,
-        )
-        pdf_btn = gr.Button("📄 PDF 보고서 생성", variant="secondary", scale=1)
-    pdf_status = gr.Textbox(label="PDF 상태", interactive=False, lines=1)
-    pdf_output = gr.File(label="📥 PDF 다운로드")
+            sagittal_img.select(fn=on_sagittal_click, outputs=[slice_slider]).then(
+                fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT,
+            )
+            coronal_img.select(fn=on_coronal_click, outputs=[slice_slider]).then(
+                fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT,
+            )
 
-    # ── 이벤트 연결 ───────────────────────────────────────────────────────────
+        # ━━ 환자 기록 탭 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        with gr.Tab("📁 환자 기록"):
 
-    _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
-    _RUN_OUT  = [axial_img, sagittal_img, coronal_img,
-                 legend_html, results_html, header_html,
-                 volume_box, clinical_box]
-    _VIEW_OUT = [axial_img, sagittal_img, coronal_img]
-    _CTRL_IN  = [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]
+            records_state = gr.State([])
 
-    file_input.change(
-        fn=load_file,
-        inputs=[file_input, patient_name_input, exam_date_input],
-        outputs=_LOAD_OUT,
-    )
+            with gr.Row():
+                refresh_btn = gr.Button("🔄 목록 새로고침", variant="secondary", scale=1)
+                export_btn  = gr.Button("📊 CSV 내보내기", variant="secondary", scale=1)
+                gr.HTML("<div></div>", scale=3)
 
-    # 환자 이름/날짜 변경 → 헤더만 갱신
-    for inp in [patient_name_input, exam_date_input]:
-        inp.change(
-            fn=lambda n, d: _make_header_html(n, d, "idle"),
-            inputs=[patient_name_input, exam_date_input],
-            outputs=[header_html],
-        )
+            records_df = gr.Dataframe(
+                headers=["환자명", "검사일", "나이", "성별", "분석일시", "장기"],
+                label="저장된 분석 기록 — 행 클릭 시 상세 보기",
+                interactive=False,
+                wrap=True,
+            )
 
-    run_btn.click(
-        fn=run_inference,
-        inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
-                mask_toggle, age_input, sex_input, patient_name_input, exam_date_input],
-        outputs=_RUN_OUT,
-    )
+            gr.Markdown("#### 상세 보기")
+            record_detail_html = gr.HTML(
+                value=("<div style='color:#475569;padding:24px;text-align:center;"
+                       "font-size:0.9rem;'>위 목록에서 행을 클릭하면 상세 내용이 표시됩니다</div>")
+            )
 
-    pdf_btn.click(
-        fn=generate_pdf_report,
-        inputs=[patient_id_input],
-        outputs=[pdf_output, pdf_status],
-    )
+            csv_file_output = gr.File(label="📥 CSV 다운로드", visible=False)
 
-    for ctrl in [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]:
-        ctrl.change(fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT)
-
-    sagittal_img.select(fn=on_sagittal_click, outputs=[slice_slider]).then(
-        fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT,
-    )
-    coronal_img.select(fn=on_coronal_click, outputs=[slice_slider]).then(
-        fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT,
-    )
+            # 이벤트
+            refresh_btn.click(
+                fn=refresh_records_fn,
+                outputs=[records_df, records_state],
+            )
+            records_df.select(
+                fn=show_record_detail_fn,
+                inputs=[records_state],
+                outputs=[record_detail_html],
+            )
+            export_btn.click(
+                fn=export_csv_fn,
+                inputs=[records_state],
+                outputs=[csv_file_output],
+            )
 
 
 if __name__ == "__main__":
