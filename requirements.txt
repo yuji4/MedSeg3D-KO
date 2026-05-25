@@ -24,3 +24,4 @@ opencv-python>=4.9.0.80
 # 분석
 pandas>=2.2.2
 fpdf2>=2.7.0
+plotly>=5.20.0

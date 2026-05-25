@@ -18,11 +18,20 @@ from src.inference.model_loader import ModelConfig, get_colab_config
 from src.inference.segmentation import SegmentationPipeline, _detect_organs_en
 from src.analysis.volume import analyze_mask
 from src.analysis.clinical import assess_organ, format_clinical_summary
-from src.analysis.records import save_record, list_records, export_records_csv
 from src.analysis.report import generate_report
+from src.database.db import init_db
+from src.database.crud import (
+    upsert_patient, save_exam, list_patients,
+    list_all_exams, get_patient_exams, get_exam_organs,
+    get_organ_trend, get_patient_organ_labels,
+    export_all_csv, export_patient_csv,
+)
+from src.auth.auth import get_auth_list
 from src.translation.translator import MedicalTranslator
 from src.translation.medical_terms import get_korean_term
 from app.visualization import get_slice_views, make_panel, _LABEL_COLORS
+
+init_db()
 
 
 # ── Colab 한국어 폰트 자동 설치 ────────────────────────────────────────────────
@@ -45,9 +54,10 @@ _current_volume: np.ndarray | None = None
 _current_spacing: tuple[float, float, float] = (1.0, 1.0, 1.0)
 _last_inference: dict = {}
 _SEX_MAP = {"남성": "male", "여성": "female", "미입력": "unknown"}
+_SEX_KO  = {"male": "남성", "female": "여성", "unknown": "미입력"}
 
 
-# ── 테마 ──────────────────────────────────────────────────────────────────────
+# ── 테마 / CSS ─────────────────────────────────────────────────────────────────
 _THEME = gr.themes.Soft(
     primary_hue=gr.themes.colors.blue,
     neutral_hue=gr.themes.colors.slate,
@@ -83,7 +93,7 @@ footer { display: none; }
 """
 
 
-# ── HTML 생성 ──────────────────────────────────────────────────────────────────
+# ── HTML 생성 헬퍼 ─────────────────────────────────────────────────────────────
 def _make_header_html(patient_name: str = "", exam_date: str = "",
                       status: str = "idle") -> str:
     _S = {
@@ -146,7 +156,6 @@ def _make_results_html(assessments: list) -> str:
         return ("<div style='color:#475569;padding:32px 16px;text-align:center;"
                 "font-size:0.9rem;line-height:1.8;'>"
                 "세그멘테이션을 실행하면<br>장기별 분석 결과가 여기에 표시됩니다</div>")
-
     _COLOR = {
         "high":    ("#ef4444", "#3f0c0c"),
         "low":     ("#f97316", "#3f1a08"),
@@ -154,10 +163,8 @@ def _make_results_html(assessments: list) -> str:
         "unknown": ("#64748b", "#1e293b"),
     }
     _BADGE = {
-        "high":    "↑ 정상 초과",
-        "low":     "↓ 정상 미만",
-        "normal":  "✓ 정상",
-        "unknown": "참고범위없음",
+        "high": "↑ 정상 초과", "low": "↓ 정상 미만",
+        "normal": "✓ 정상", "unknown": "참고범위없음",
     }
     ordered = (
         [a for a in assessments if a.status in ("high", "low")] +
@@ -190,25 +197,10 @@ def _make_results_html(assessments: list) -> str:
     return "<div>" + "".join(cards) + "</div>"
 
 
-# ── 환자 기록 헬퍼 ─────────────────────────────────────────────────────────────
-def _records_to_df_data(records: list[dict]) -> list[list]:
-    rows = []
-    for r in records:
-        n = len(r.get("organs", []))
-        ab = sum(1 for o in r.get("organs", []) if o.get("status") in ("high", "low"))
-        sex_ko = {"male": "남성", "female": "여성"}.get(r.get("sex", ""), "미입력")
-        rows.append([
-            r.get("patient_name", "-") or "-",
-            r.get("exam_date", "-"),
-            str(r.get("age", "-")),
-            sex_ko,
-            r.get("analyzed_at", "")[:16].replace("T", " "),
-            f"{n}개" + (f" (이상 {ab})" if ab else ""),
-        ])
-    return rows
-
-
-def _make_record_detail_html(rec: dict) -> str:
+def _make_exam_detail_html(organs: list[dict]) -> str:
+    """DB에서 가져온 장기 결과 dict 리스트를 카드 HTML로 변환."""
+    if not organs:
+        return "<div style='color:#475569;padding:16px;'>장기 데이터 없음</div>"
     _COLOR = {
         "high":    ("#ef4444", "#3f0c0c"),
         "low":     ("#f97316", "#3f1a08"),
@@ -217,21 +209,10 @@ def _make_record_detail_html(rec: dict) -> str:
     }
     _BADGE = {"high": "↑ 정상 초과", "low": "↓ 정상 미만",
               "normal": "✓ 정상", "unknown": "참고범위없음"}
-    sex_ko = {"male": "남성", "female": "여성"}.get(rec.get("sex", ""), "미입력")
-    hdr = (
-        f"<div style='margin-bottom:10px;color:#94a3b8;font-size:0.85rem;"
-        f"padding:8px 12px;background:#0f172a;border-radius:6px;'>"
-        f"👤 {rec.get('patient_name','미입력') or '미입력'} &nbsp;|&nbsp; "
-        f"검사일: {rec.get('exam_date','-')} &nbsp;|&nbsp; "
-        f"{rec.get('age','-')}세 / {sex_ko} &nbsp;|&nbsp; "
-        f"분석: {rec.get('analyzed_at','')[:16].replace('T',' ')}"
-        f"</div>"
-    )
-    organs = rec.get("organs", [])
     ordered = (
-        [o for o in organs if o.get("status") in ("high", "low")] +
-        [o for o in organs if o.get("status") == "normal"] +
-        [o for o in organs if o.get("status") == "unknown"]
+        [o for o in organs if o["status"] in ("high", "low")] +
+        [o for o in organs if o["status"] == "normal"] +
+        [o for o in organs if o["status"] == "unknown"]
     )
     cards = []
     for o in ordered:
@@ -240,26 +221,75 @@ def _make_record_detail_html(rec: dict) -> str:
         badge = _BADGE.get(st, "—")
         lo, hi = o.get("range_lo"), o.get("range_hi")
         range_str = f"{lo:.0f}~{hi:.0f} mL" if (lo is not None and hi is not None) else "기준 없음"
-        note = o.get("note", "")
+        note = o.get("note", "") or ""
         note_html = (f" <span style='color:#64748b;font-size:0.74rem;'>({note})</span>"
                      if note else "")
         cards.append(f"""
 <div style="background:#1e293b;border-radius:8px;padding:10px 13px;margin-bottom:6px;
             border:1px solid #334155;border-left:4px solid {border};">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-    <span style="color:#e2e8f0;font-weight:600;font-size:0.9rem;">{get_korean_term(o.get('label',''))}</span>
+    <span style="color:#e2e8f0;font-weight:600;font-size:0.9rem;">{get_korean_term(o['label'])}</span>
     <span style="background:{badge_bg};color:{border};border:1px solid {border};
                  padding:1px 8px;border-radius:10px;font-size:0.71rem;font-weight:700;">{badge}</span>
   </div>
   <div style="color:#94a3b8;font-size:0.82rem;">
-    측정: <b style="color:#e2e8f0;">{o.get('volume_ml', 0):.1f} mL</b>
+    측정: <b style="color:#e2e8f0;">{o['volume_ml']:.1f} mL</b>
     &nbsp;|&nbsp; 정상범위: <span style="color:#cbd5e1;">{range_str}</span>{note_html}
   </div>
 </div>""")
-    body = ("<div>" + "".join(cards) + "</div>") if cards else (
-        "<div style='color:#475569;padding:16px;'>장기 데이터 없음</div>"
+    return "<div>" + "".join(cards) + "</div>"
+
+
+# ── 종단적 차트 ───────────────────────────────────────────────────────────────
+def _make_trend_chart(patient_id: int, label: str):
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return None
+
+    trend = get_organ_trend(patient_id, label)
+    if len(trend) < 2:
+        return None
+
+    dates = [r["exam_date"] or r["analyzed_at"][:10] for r in trend]
+    vols  = [r["volume_ml"] for r in trend]
+    lo    = trend[0]["range_lo"]
+    hi    = trend[0]["range_hi"]
+
+    fig = go.Figure()
+    if lo is not None and hi is not None:
+        fig.add_hrect(y0=lo, y1=hi, fillcolor="rgba(34,197,94,0.08)",
+                      line_width=0, annotation_text="정상범위",
+                      annotation_position="top left",
+                      annotation_font_color="#22c55e")
+    fig.add_trace(go.Scatter(
+        x=dates, y=vols,
+        mode="lines+markers+text",
+        text=[f"{v:.1f}" for v in vols],
+        textposition="top center",
+        textfont=dict(color="#e2e8f0", size=11),
+        name=get_korean_term(label),
+        line=dict(color="#3b82f6", width=2),
+        marker=dict(size=9, color=[
+            "#ef4444" if r["status"] in ("high", "low") else "#22c55e"
+            for r in trend
+        ]),
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#1e293b",
+        font=dict(color="#e2e8f0"),
+        margin=dict(l=50, r=20, t=40, b=40),
+        title=dict(
+            text=f"{get_korean_term(label)} 부피 추이 (mL)",
+            font=dict(size=14, color="#e2e8f0"),
+        ),
+        xaxis=dict(gridcolor="#334155", title="검사일"),
+        yaxis=dict(gridcolor="#334155", title="부피 (mL)"),
+        showlegend=False,
     )
-    return hdr + body
+    return fig
 
 
 # ── 초기화 ────────────────────────────────────────────────────────────────────
@@ -393,9 +423,11 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         "label_names": label_names,
     })
 
-    # 분석 결과 자동 저장
+    # DB 저장
     try:
-        save_record(patient_name, "", exam_date, int(age), sex, organ_results)
+        pid = upsert_patient(patient_name or "미입력", sex)
+        save_exam(pid, exam_date or datetime.now().strftime("%Y-%m-%d"),
+                  int(age), organ_results)
     except Exception:
         pass
 
@@ -414,14 +446,13 @@ def _best_slice_index(mask: np.ndarray) -> int:
     return int(np.argmax(counts))
 
 
-def generate_pdf_report(patient_id: str = "") -> tuple:
+def generate_pdf_report(patient_id_str: str = "") -> tuple:
     if not _last_inference.get("organ_results"):
         return None, "⚠️ 먼저 세그멘테이션을 실행해주세요."
-    _last_inference["patient_id"] = patient_id
     path = generate_report(
         organ_results=_last_inference["organ_results"],
         panel_image=_last_inference.get("panel_image"),
-        patient_id=patient_id,
+        patient_id=patient_id_str,
     )
     return path, f"✅ PDF 생성: {os.path.basename(path)}"
 
@@ -456,23 +487,99 @@ def on_coronal_click(evt: gr.SelectData) -> int:
     return max(0, min(int(evt.index[1] / 256 * D), D - 1))
 
 
-# ── 환자 기록 이벤트 핸들러 ────────────────────────────────────────────────────
-def refresh_records_fn():
-    recs = list_records()
-    return _records_to_df_data(recs), recs
+# ── 환자 이력 탭 이벤트 핸들러 ────────────────────────────────────────────────
+def _exams_to_df(exams: list[dict]) -> list[list]:
+    rows = []
+    for e in exams:
+        ab = e.get("n_abnormal") or 0
+        n  = e.get("n_organs") or 0
+        rows.append([
+            str(e.get("id", "")),
+            e.get("patient_name", "-"),
+            _SEX_KO.get(e.get("sex", ""), "미입력"),
+            e.get("exam_date", "-"),
+            str(e.get("age_at_exam", "-")),
+            e.get("analyzed_at", "")[:16].replace("T", " "),
+            f"{n}개" + (f" (이상 {ab})" if ab else ""),
+        ])
+    return rows
 
 
-def show_record_detail_fn(evt: gr.SelectData, recs: list) -> str:
-    if not recs or evt.index[0] >= len(recs):
-        return "<div style='color:#475569;padding:16px;'>선택된 기록 없음</div>"
-    return _make_record_detail_html(recs[evt.index[0]])
+def refresh_history_fn():
+    exams = list_all_exams()
+    patients = list_patients()
+    patient_choices = [f"{p['name']} (ID:{p['id']})" for p in patients]
+    return _exams_to_df(exams), exams, gr.update(choices=patient_choices)
 
 
-def export_csv_fn(recs: list):
-    if not recs:
+def on_exam_select_fn(evt: gr.SelectData, exams: list) -> tuple:
+    if not exams or evt.index[0] >= len(exams):
+        return "<div style='color:#475569;padding:16px;'>선택 오류</div>", None
+    exam = exams[evt.index[0]]
+    exam_id = exam["id"]
+    organs = get_exam_organs(exam_id)
+    detail_html = (
+        f"<div style='color:#94a3b8;font-size:0.83rem;padding:6px 10px;"
+        f"background:#0f172a;border-radius:6px;margin-bottom:8px;'>"
+        f"👤 {exam.get('patient_name','-')} | "
+        f"검사일: {exam.get('exam_date','-')} | "
+        f"{exam.get('age_at_exam','-')}세 | "
+        f"분석: {str(exam.get('analyzed_at',''))[:16].replace('T',' ')}"
+        f"</div>"
+        + _make_exam_detail_html(organs)
+    )
+    return detail_html, exam_id
+
+
+def load_patient_trend_fn(patient_str: str, organ_label: str):
+    if not patient_str or not organ_label:
+        return None, gr.update(choices=[])
+    try:
+        pid = int(patient_str.split("ID:")[-1].rstrip(")"))
+    except Exception:
+        return None, gr.update(choices=[])
+    labels = get_patient_organ_labels(pid)
+    ko_choices = [f"{get_korean_term(l)} ({l})" for l in labels]
+    fig = _make_trend_chart(pid, organ_label)
+    return fig, gr.update(choices=ko_choices)
+
+
+def select_patient_fn(patient_str: str):
+    if not patient_str:
+        return gr.update(choices=[])
+    try:
+        pid = int(patient_str.split("ID:")[-1].rstrip(")"))
+    except Exception:
+        return gr.update(choices=[])
+    labels = get_patient_organ_labels(pid)
+    return gr.update(choices=[f"{get_korean_term(l)} ({l})" for l in labels], value=None)
+
+
+def draw_trend_fn(patient_str: str, organ_ko_str: str):
+    if not patient_str or not organ_ko_str:
+        return None
+    try:
+        pid = int(patient_str.split("ID:")[-1].rstrip(")"))
+        label = organ_ko_str.split("(")[-1].rstrip(")")
+    except Exception:
+        return None
+    return _make_trend_chart(pid, label)
+
+
+def export_all_fn():
+    path = export_all_csv()
+    return gr.update(value=path, visible=True) if path else gr.update(visible=False)
+
+
+def export_patient_fn(patient_str: str):
+    if not patient_str:
         return gr.update(visible=False)
-    path = export_records_csv(recs)
-    return gr.update(value=path, visible=True)
+    try:
+        pid = int(patient_str.split("ID:")[-1].rstrip(")"))
+    except Exception:
+        return gr.update(visible=False)
+    path = export_patient_csv(pid)
+    return gr.update(value=path, visible=True) if path else gr.update(visible=False)
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -563,13 +670,11 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                         value=_make_results_html([]),
                         elem_classes=["card-scroll"],
                     )
-
                     with gr.Accordion("📈 부피 상세 통계", open=False):
                         volume_box = gr.Textbox(
                             label=None, lines=6, interactive=False, show_copy_button=True,
                             elem_id="volume_box",
                         )
-
                     with gr.Accordion("🩺 임상 소견 상세", open=False):
                         clinical_box = gr.Textbox(
                             label=None, lines=8, interactive=False, show_copy_button=True,
@@ -597,7 +702,6 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             pdf_output = gr.File(label="📥 PDF 다운로드")
 
             # ── 이벤트 연결 ─────────────────────────────────────────────────────
-
             _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
             _RUN_OUT  = [axial_img, sagittal_img, coronal_img,
                          legend_html, results_html, header_html,
@@ -610,30 +714,25 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                 inputs=[file_input, patient_name_input, exam_date_input],
                 outputs=_LOAD_OUT,
             )
-
             for inp in [patient_name_input, exam_date_input]:
                 inp.change(
                     fn=lambda n, d: _make_header_html(n, d, "idle"),
                     inputs=[patient_name_input, exam_date_input],
                     outputs=[header_html],
                 )
-
             run_btn.click(
                 fn=run_inference,
                 inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
                         mask_toggle, age_input, sex_input, patient_name_input, exam_date_input],
                 outputs=_RUN_OUT,
             )
-
             pdf_btn.click(
                 fn=generate_pdf_report,
                 inputs=[patient_id_input],
                 outputs=[pdf_output, pdf_status],
             )
-
             for ctrl in [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]:
                 ctrl.change(fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT)
-
             sagittal_img.select(fn=on_sagittal_click, outputs=[slice_slider]).then(
                 fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT,
             )
@@ -641,48 +740,80 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                 fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT,
             )
 
-        # ━━ 환자 기록 탭 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        with gr.Tab("📁 환자 기록"):
+        # ━━ 환자 이력 탭 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        with gr.Tab("📁 환자 이력"):
 
-            records_state = gr.State([])
+            exams_state = gr.State([])
 
             with gr.Row():
-                refresh_btn = gr.Button("🔄 목록 새로고침", variant="secondary", scale=1)
-                export_btn  = gr.Button("📊 CSV 내보내기", variant="secondary", scale=1)
-                gr.HTML("<div></div>", scale=3)
+                refresh_hist_btn  = gr.Button("🔄 새로고침", variant="secondary", scale=1)
+                export_all_btn    = gr.Button("📊 전체 CSV", variant="secondary", scale=1)
+                export_patient_btn = gr.Button("📊 환자별 CSV", variant="secondary", scale=1)
+                gr.HTML("<div></div>", scale=2)
 
-            records_df = gr.Dataframe(
-                headers=["환자명", "검사일", "나이", "성별", "분석일시", "장기"],
-                label="저장된 분석 기록 — 행 클릭 시 상세 보기",
+            exams_df = gr.Dataframe(
+                headers=["ID", "환자명", "성별", "검사일", "나이", "분석일시", "장기"],
+                label="검사 기록 — 행 클릭 시 상세 보기",
                 interactive=False,
                 wrap=True,
             )
 
-            gr.Markdown("#### 상세 보기")
-            record_detail_html = gr.HTML(
-                value=("<div style='color:#475569;padding:24px;text-align:center;"
-                       "font-size:0.9rem;'>위 목록에서 행을 클릭하면 상세 내용이 표시됩니다</div>")
-            )
+            with gr.Row(equal_height=False):
+                with gr.Column(scale=3):
+                    gr.Markdown("#### 검사 상세")
+                    exam_detail_html = gr.HTML(
+                        value=("<div style='color:#475569;padding:24px;text-align:center;"
+                               "font-size:0.9rem;'>행을 클릭하면 상세 내용이 표시됩니다</div>")
+                    )
+                    selected_exam_id = gr.State(None)
 
-            csv_file_output = gr.File(label="📥 CSV 다운로드", visible=False)
+                with gr.Column(scale=2):
+                    gr.Markdown("#### 📈 장기 부피 추이")
+                    patient_dropdown = gr.Dropdown(
+                        label="환자 선택", choices=[], interactive=True,
+                    )
+                    organ_dropdown = gr.Dropdown(
+                        label="장기 선택", choices=[], interactive=True,
+                    )
+                    trend_plot = gr.Plot(label=None)
+
+            csv_download = gr.File(label="📥 CSV 다운로드", visible=False)
 
             # 이벤트
-            refresh_btn.click(
-                fn=refresh_records_fn,
-                outputs=[records_df, records_state],
+            refresh_hist_btn.click(
+                fn=refresh_history_fn,
+                outputs=[exams_df, exams_state, patient_dropdown],
             )
-            records_df.select(
-                fn=show_record_detail_fn,
-                inputs=[records_state],
-                outputs=[record_detail_html],
+            exams_df.select(
+                fn=on_exam_select_fn,
+                inputs=[exams_state],
+                outputs=[exam_detail_html, selected_exam_id],
             )
-            export_btn.click(
-                fn=export_csv_fn,
-                inputs=[records_state],
-                outputs=[csv_file_output],
+            patient_dropdown.change(
+                fn=select_patient_fn,
+                inputs=[patient_dropdown],
+                outputs=[organ_dropdown],
+            )
+            organ_dropdown.change(
+                fn=draw_trend_fn,
+                inputs=[patient_dropdown, organ_dropdown],
+                outputs=[trend_plot],
+            )
+            export_all_btn.click(
+                fn=export_all_fn,
+                outputs=[csv_download],
+            )
+            export_patient_btn.click(
+                fn=export_patient_fn,
+                inputs=[patient_dropdown],
+                outputs=[csv_download],
             )
 
 
 if __name__ == "__main__":
     demo.queue()
-    demo.launch(share=True)
+    demo.launch(
+        share=True,
+        auth=get_auth_list(),
+        auth_message="MedSeg-3D-KO — 의사 계정으로 로그인하세요",
+    )
