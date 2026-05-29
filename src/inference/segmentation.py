@@ -15,11 +15,39 @@ TARGET_SHAPE = (32, 256, 256)
 # 한국어 장기명 → 영문 (TERM_KO 역방향)
 _KO_TO_EN: dict[str, str] = {v: k for k, v in TERM_KO.items()}
 
-# 세그멘테이션 의도 패턴
+# 의도 분류 패턴
 _SEG_INTENT = re.compile(
     r"(분할|세그|마스크|segmen|segment|mask|찾아|표시|보여|어디|위치)",
     re.IGNORECASE,
 )
+_CAPTION_INTENT = re.compile(
+    r"(소견|리포트|report|findings|보고서|진단서|요약|생성)",
+    re.IGNORECASE,
+)
+
+
+def detect_intent(question_ko: str) -> str:
+    """질문 의도 분류: 'seg' | 'caption' | 'vqa'"""
+    if _SEG_INTENT.search(question_ko):
+        return "seg"
+    if _CAPTION_INTENT.search(question_ko):
+        return "caption"
+    return "vqa"
+
+
+def _translate_en_to_ko(text: str) -> str:
+    """영어 → 한국어 번역 (deep_translator). 실패 시 원문 반환."""
+    try:
+        from deep_translator import GoogleTranslator
+        # GoogleTranslator 최대 5000자 제한
+        if len(text) <= 4999:
+            return GoogleTranslator(source="en", target="ko").translate(text)
+        chunks = [text[i:i + 4999] for i in range(0, len(text), 4999)]
+        return " ".join(
+            GoogleTranslator(source="en", target="ko").translate(c) for c in chunks
+        )
+    except Exception:
+        return text
 
 
 def _detect_organs_en(question_ko: str) -> list[str]:
@@ -246,6 +274,64 @@ class SegmentationPipeline:
         mask = self._resize_mask(mask_model, orig_shape)
         return {"question_en": question_en, "answer_en": answer_en,
                 "organ_label": None, "mask": mask, "mask_model": mask_model}
+
+    def _generate_text_only(
+        self,
+        image_pt: torch.Tensor,
+        prompt_en: str,
+        max_new_tokens: int = 512,
+        do_sample: bool = False,
+    ) -> str:
+        """seg_enable=False로 텍스트 답변만 생성."""
+        prompt = "<im_patch>" * PROJ_OUT_NUM + prompt_en
+        input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"].to(self._device)
+        with torch.no_grad():
+            output = self.model.generate(
+                image_pt, input_ids,
+                seg_enable=False,
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+            )
+        generation = output[0] if isinstance(output, (tuple, list)) else output
+        return self.tokenizer.batch_decode(generation, skip_special_tokens=True)[0]
+
+    def run_vqa(
+        self,
+        image_np: np.ndarray,
+        question_ko: str,
+        max_new_tokens: int = 384,
+    ) -> str:
+        """VQA: 한국어 질문 → 영문 번역 → M3D 답변 → 영문 반환."""
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다.")
+        image_pt, _ = self._prepare_image_pt(image_np)
+        question_en = _translate_ko_to_en(question_ko)
+        return self._generate_text_only(image_pt, question_en, max_new_tokens)
+
+    def run_caption(
+        self,
+        image_np: np.ndarray,
+        max_new_tokens: int = 512,
+    ) -> str:
+        """소견 생성: Caption 프롬프트로 의료 영상 소견 텍스트 반환."""
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다.")
+        image_pt, _ = self._prepare_image_pt(image_np)
+        prompt_en = "Can you provide a caption consists of findings for this medical image?"
+        return self._generate_text_only(image_pt, prompt_en, max_new_tokens)
+
+    def run_reg(
+        self,
+        image_np: np.ndarray,
+        organ_en: str,
+        max_new_tokens: int = 384,
+    ) -> str:
+        """REG: 특정 장기 기능·설명 텍스트 반환."""
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다.")
+        image_pt, _ = self._prepare_image_pt(image_np)
+        prompt_en = f"Please describe the {organ_en} and its function."
+        return self._generate_text_only(image_pt, prompt_en, max_new_tokens)
 
     @staticmethod
     def _resize_mask(

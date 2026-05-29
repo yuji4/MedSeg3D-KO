@@ -15,7 +15,10 @@ import gradio as gr
 from PIL import Image
 
 from src.inference.model_loader import ModelConfig, get_colab_config
-from src.inference.segmentation import SegmentationPipeline, _detect_organs_en
+from src.inference.segmentation import (
+    SegmentationPipeline, _detect_organs_en,
+    detect_intent, _translate_en_to_ko,
+)
 from src.analysis.volume import analyze_mask
 from src.analysis.clinical import assess_organ, format_clinical_summary
 from src.analysis.report import generate_report
@@ -260,6 +263,32 @@ def _make_results_html(assessments: list) -> str:
     return "<div>" + "".join(cards) + "</div>"
 
 
+def _translate_and_clean(answer_en: str) -> str:
+    """영문 M3D 출력 → 한국어 번역 → 의학 용어 정리."""
+    ko = _translate_en_to_ko(answer_en)
+    return _translator.translate_response(ko)
+
+
+_ANSWER_MODE = {
+    "vqa":     ("💬 VQA 답변",   "#3b82f6", "#172554"),
+    "caption": ("📋 소견 생성",  "#8b5cf6", "#2e1065"),
+    "reg":     ("🔬 장기 설명",  "#06b6d4", "#083344"),
+}
+
+
+def _make_answer_html(mode: str, text: str) -> str:
+    icon, color, bg = _ANSWER_MODE.get(mode, _ANSWER_MODE["vqa"])
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        f"<div style='background:{bg};border:1px solid {color};border-radius:8px;"
+        f"padding:14px 16px;margin-bottom:8px;'>"
+        f"<div style='color:{color};font-size:0.8rem;font-weight:700;margin-bottom:8px;'>"
+        f"{icon}</div>"
+        f"<div style='color:#e2e8f0;font-size:0.88rem;line-height:1.8;"
+        f"white-space:pre-wrap;'>{safe}</div></div>"
+    )
+
+
 def _make_exam_detail_html(organs: list[dict]) -> str:
     if not organs:
         return "<div style='color:#475569;padding:16px;'>장기 데이터 없음</div>"
@@ -405,6 +434,23 @@ def load_file(file_obj, patient_name, exam_date):
 
 
 # ── 추론 ──────────────────────────────────────────────────────────────────────
+def run_reg_fn(organ_ko_label: str):
+    """선택된 장기 영역 설명 (REG)."""
+    if not organ_ko_label or _current_volume is None:
+        return ""
+    if not _last_inference.get("label_names"):
+        return "세그멘테이션을 먼저 실행해주세요."
+    # 레이블 이름에서 영문 추출 "간 (liver)" → "liver"
+    organ_en = organ_ko_label.split("(")[-1].rstrip(")").strip() if "(" in organ_ko_label else organ_ko_label
+    try:
+        pipeline = _get_pipeline()
+        answer_en = pipeline.run_reg(_current_volume, organ_en)
+        answer_ko = _translate_and_clean(answer_en)
+        return _make_answer_html("reg", answer_ko)
+    except Exception as e:
+        return f"오류: {e}"
+
+
 def on_rrn_change(rrn: str):
     """주민등록번호 입력 시 나이·성별 자동 채우기."""
     parsed = _parse_rrn(rrn)
@@ -418,19 +464,65 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
                   age, sex_ko, patient_name, exam_date, doctor_notes, rrn):
     global _current_volume, _current_spacing, _last_inference
 
-    _hdr = lambda s: _make_header_html(patient_name, exam_date, s)
-    _blank = (None, None, None, _make_legend_html({}), _make_results_html([]))
+    _hdr  = lambda s: _make_header_html(patient_name, exam_date, s)
+    _empty_views = (None, None, None)
+    _blank = (*_empty_views, _make_legend_html({}), _make_results_html([]))
 
     if _current_volume is None:
-        return (*_blank, _hdr("idle"), "", "먼저 CT 파일을 업로드해주세요.")
+        return (*_blank, _hdr("idle"), "", "", "", gr.update(choices=[]))
     if not question_ko.strip():
-        return (*_blank, _hdr("loaded"), "", "질문을 입력해주세요.")
+        return (*_blank, _hdr("loaded"), "", "", "", gr.update(choices=[]))
 
     try:
         pipeline = _get_pipeline()
     except Exception as e:
-        return (*_blank, _hdr("idle"), "", f"모델 로드 실패: {e}")
+        return (*_blank, _hdr("idle"), "", "", f"모델 로드 실패: {e}", gr.update(choices=[]))
 
+    intent = detect_intent(question_ko)
+
+    # ── VQA 분기 ────────────────────────────────────────────────────────────
+    if intent == "vqa":
+        try:
+            answer_en = pipeline.run_vqa(_current_volume, question_ko)
+            answer_ko = _translate_and_clean(answer_en)
+        except Exception as e:
+            answer_ko = f"VQA 오류: {e}"
+        D = _current_volume.shape[0]
+        views = get_slice_views(_current_volume, None,
+                                slice_indices={"axial": D // 2,
+                                               "sagittal": _current_volume.shape[2] // 2,
+                                               "coronal": _current_volume.shape[1] // 2})
+        return (
+            *_views_to_pil(views),
+            _make_legend_html({}),
+            _make_answer_html("vqa", answer_ko),
+            _hdr("done_ok"),
+            "", answer_ko, "",
+            gr.update(choices=[]),
+        )
+
+    # ── 소견 생성 분기 ────────────────────────────────────────────────────────
+    if intent == "caption":
+        try:
+            answer_en = pipeline.run_caption(_current_volume)
+            answer_ko = _translate_and_clean(answer_en)
+        except Exception as e:
+            answer_ko = f"소견 생성 오류: {e}"
+        D = _current_volume.shape[0]
+        views = get_slice_views(_current_volume, None,
+                                slice_indices={"axial": D // 2,
+                                               "sagittal": _current_volume.shape[2] // 2,
+                                               "coronal": _current_volume.shape[1] // 2})
+        return (
+            *_views_to_pil(views),
+            _make_legend_html({}),
+            _make_answer_html("caption", answer_ko),
+            _hdr("done_ok"),
+            "", answer_ko, "",
+            gr.update(choices=[]),
+        )
+
+    # ── 세그멘테이션 분기 ────────────────────────────────────────────────────
     organs = _detect_organs_en(question_ko)
     try:
         if not organs:
@@ -440,7 +532,7 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
             image_pt, original = pipeline._prepare_image_pt(_current_volume)
             results = [pipeline._infer(image_pt, original, org, question_ko) for org in organs]
     except Exception as e:
-        return (*_blank, _hdr("loaded"), "", f"추론 오류: {e}")
+        return (*_blank, _hdr("loaded"), "", "", f"추론 오류: {e}", gr.update(choices=[]))
 
     combined_mask = np.zeros(_current_volume.shape, dtype=np.uint8)
     label_names: dict[int, str] = {}
@@ -503,6 +595,9 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
     except Exception:
         pass
 
+    # REG용 장기 드롭다운 선택지
+    organ_choices = [f"{get_korean_term(org)} ({org})" for org in organs if org]
+
     return (
         *_views_to_pil(views),
         _make_legend_html(label_names) if mask_on else _make_legend_html({}),
@@ -510,6 +605,8 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         _hdr(status),
         "\n\n".join(volume_lines),
         format_clinical_summary(assessments, age=int(age), sex=sex),
+        "",
+        gr.update(choices=organ_choices, value=organ_choices[0] if organ_choices else None),
     )
 
 
@@ -784,6 +881,17 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
 
                     gr.Markdown("---")
 
+                    gr.Markdown("#### 🔬 장기 설명 요청 (REG)")
+                    with gr.Row():
+                        organ_select = gr.Dropdown(
+                            label="세그멘테이션된 장기 선택",
+                            choices=[], interactive=True, scale=3,
+                        )
+                        reg_btn = gr.Button("설명 요청", variant="secondary", scale=1)
+                    reg_answer_html = gr.HTML(value="")
+
+                    gr.Markdown("---")
+
                     with gr.Row():
                         pdf_btn    = gr.Button("📄 PDF 생성", variant="secondary", scale=1)
                         pdf_output = gr.File(label="PDF 다운로드", scale=2)
@@ -794,7 +902,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
             _RUN_OUT  = [axial_img, sagittal_img, coronal_img,
                          legend_html, results_html, header_html,
-                         volume_box, clinical_box]
+                         volume_box, clinical_box, reg_answer_html, organ_select]
             _VIEW_OUT = [axial_img, sagittal_img, coronal_img]
             _CTRL_IN  = [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]
 
@@ -826,6 +934,11 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             pdf_btn.click(
                 fn=generate_pdf_report,
                 outputs=[pdf_output, pdf_status],
+            )
+            reg_btn.click(
+                fn=run_reg_fn,
+                inputs=[organ_select],
+                outputs=[reg_answer_html],
             )
             for ctrl in [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]:
                 ctrl.change(fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT)
