@@ -494,6 +494,12 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
 
     # 파이프라인으로 의도 분류
     qp = _query_pipeline.transform(question_ko)
+    # 세그일 때는 감지된 전체 장기 목록 표시
+    _all_organs_en = _detect_organs_en(question_ko)
+    _organs_ko_str = "、".join(get_korean_term(o) for o in _all_organs_en) if _all_organs_en else (
+        get_korean_term(qp["organ"]) if qp["organ"] else ""
+    )
+
     state = dict(
         views=(None, None, None),
         legend=_make_legend_html({}),
@@ -501,22 +507,33 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
         hdr="loaded",
         vol="", clin="",
         organs=[],
-        vqa="", caption="", reg="",
-        intent_html=_make_intent_html(
-            qp["intent_ko"],
-            get_korean_term(qp["organ"]) if qp["organ"] else "",
-        ),
+        _assessments=[], _reg_texts=[], _vqa_raw="", _caption_raw="",
+        intent_html=_make_intent_html(qp["intent_ko"], _organs_ko_str),
     )
+
+    def _build_full_results() -> str:
+        parts = []
+        if state["_assessments"]:
+            parts.append(_make_results_html(state["_assessments"]))
+        extra = state["_reg_texts"] or state["_vqa_raw"] or state["_caption_raw"]
+        if parts and extra:
+            parts.append("<hr style='border-color:#334155;margin:12px 0;'>")
+        if state["_reg_texts"]:
+            parts.append(_make_reg_all_html(state["_reg_texts"]))
+        if state["_vqa_raw"]:
+            parts.append(_make_answer_html("vqa", state["_vqa_raw"]))
+        if state["_caption_raw"]:
+            parts.append(_make_answer_html("caption", state["_caption_raw"]))
+        return "".join(parts) if parts else _make_results_html([])
 
     def _emit(status=""):
         org_val = state["organs"][0] if state["organs"] else None
         return (
             *state["views"],
-            state["legend"], state["results"], _hdr(state["hdr"]),
+            state["legend"], _build_full_results(), _hdr(state["hdr"]),
             state["vol"], state["clin"],
             gr.update(choices=state["organs"], value=org_val),
             _make_status_html(status),
-            state["vqa"], state["caption"], state["reg"],
             state["intent_html"],
         )
 
@@ -606,43 +623,43 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
     state.update(
         views=_views_to_pil(seg_views_dict),
         legend=_make_legend_html(label_names) if mask_on else _make_legend_html({}),
-        results=_make_results_html(assessments),
         hdr="done_warn" if has_abnormal else "done_ok",
         vol="\n\n".join(volume_lines),
         clin=format_clinical_summary(assessments, age=int(age), sex=sex),
         organs=[f"{get_korean_term(org)} ({org})" for org in organs if org],
+        _assessments=assessments,
     )
     yield _emit("🔬 2/4 — 영역 설명 생성 중…")
 
     # ── 2/4 REG ──────────────────────────────────────────────────────────────
-    reg_texts = []
     for org in organs:
         if not org:
             continue
         try:
-            reg_texts.append((get_korean_term(org),
-                               _translate_and_clean(pipeline.run_reg(_current_volume, org))))
+            state["_reg_texts"].append((
+                get_korean_term(org),
+                _translate_and_clean(pipeline.run_reg(_current_volume, org)),
+            ))
         except Exception:
             pass
-    state["reg"] = _make_reg_all_html(reg_texts)
     yield _emit("💬 3/4 — VQA 처리 중…")
 
     # ── 3/4 VQA ──────────────────────────────────────────────────────────────
     try:
-        state["vqa"] = _make_answer_html(
-            "vqa", _translate_and_clean(pipeline.run_vqa(_current_volume, question_ko))
+        state["_vqa_raw"] = _translate_and_clean(
+            pipeline.run_vqa(_current_volume, question_ko)
         )
     except Exception as e:
-        state["vqa"] = _make_answer_html("vqa", f"오류: {e}")
+        state["_vqa_raw"] = f"오류: {e}"
     yield _emit("📋 4/4 — 소견 생성 중…")
 
     # ── 4/4 Caption ──────────────────────────────────────────────────────────
     try:
-        state["caption"] = _make_answer_html(
-            "caption", _translate_and_clean(pipeline.run_caption(_current_volume))
+        state["_caption_raw"] = _translate_and_clean(
+            pipeline.run_caption(_current_volume)
         )
     except Exception as e:
-        state["caption"] = _make_answer_html("caption", f"오류: {e}")
+        state["_caption_raw"] = f"오류: {e}"
 
     yield _emit("✅ 종합 분석 완료")
 
@@ -735,13 +752,15 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
 
     # ── Layer 1-3: 의도 분류 + 엔티티 정규화 + 템플릿 선택 ────────────────────
     qp = _query_pipeline.transform(question_ko)
-    intent     = qp["intent"]
-    organ_en   = qp["organ"]
-    prompt_en  = qp["prompt"]
-    intent_ko  = qp["intent_ko"]
-    intent_html_val = _make_intent_html(
-        intent_ko, get_korean_term(organ_en) if organ_en else ""
-    )
+    intent    = qp["intent"]
+    organ_en  = qp["organ"]
+    prompt_en = qp["prompt"]
+    intent_ko = qp["intent_ko"]
+    # 세그일 때 감지된 전체 장기 목록 표시, 그 외는 단일 장기
+    _all_en = _detect_organs_en(question_ko) if intent == Intent.SEGMENTATION else []
+    _organs_badge = ("、".join(get_korean_term(o) for o in _all_en)
+                     if _all_en else (get_korean_term(organ_en) if organ_en else ""))
+    intent_html_val = _make_intent_html(intent_ko, _organs_badge)
 
     # ── VQA 분기 ────────────────────────────────────────────────────────────
     if intent == Intent.VQA:
@@ -1171,13 +1190,6 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                             label=None, lines=7, interactive=False, show_copy_button=True,
                             elem_id="clinical_box",
                         )
-                    with gr.Accordion("💬 VQA 답변", open=False):
-                        vqa_html = gr.HTML(value="")
-                    with gr.Accordion("📋 소견 생성", open=False):
-                        caption_html = gr.HTML(value="")
-                    with gr.Accordion("🔬 전체 장기 설명 (REG)", open=False):
-                        reg_all_html = gr.HTML(value="")
-
                     gr.Markdown("---")
 
                     gr.Markdown("#### 🔬 개별 장기 설명")
@@ -1207,7 +1219,6 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                          legend_html, results_html, header_html,
                          volume_box, clinical_box,
                          organ_select, pipeline_status_html,
-                         vqa_html, caption_html, reg_all_html,
                          intent_html]
             _FULL_IN  = [question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
                          mask_toggle, age_input, sex_input,
@@ -1215,13 +1226,11 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             _VIEW_OUT = [axial_img, sagittal_img, coronal_img]
             _CTRL_IN  = [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]
 
-            # RRN 입력 → 나이/성별 자동 채우기
             rrn_input.change(
                 fn=on_rrn_change,
                 inputs=[rrn_input],
                 outputs=[age_input, sex_input],
             )
-
             file_input.change(
                 fn=load_file,
                 inputs=[file_input, patient_name_input, exam_date_input],
