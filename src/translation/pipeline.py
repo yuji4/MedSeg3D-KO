@@ -18,8 +18,8 @@ _KO_TO_EN: dict[str, str] = {v: k for k, v in TERM_KO.items()}
 # ── 검증된 템플릿 ─────────────────────────────────────────────────────────────
 SEG_TEMPLATE    = "Can you segment the {organ} in this image? Please output the mask."
 VQA_TEMPLATE    = "What is the condition of the {organ} in this image?"
-REPORT_TEMPLATE = "Can you provide a caption consists of findings for this medical image?"
-REG_TEMPLATE    = "Please describe the {organ} and its function in this image."
+REPORT_TEMPLATE = "What are the main findings in this medical image? Describe any abnormalities or notable observations visible in the scan."
+REG_TEMPLATE    = "Describe the appearance and condition of the {organ} visible in this scan. Note its size, shape, and any observable abnormalities."
 
 
 class Intent(str, Enum):

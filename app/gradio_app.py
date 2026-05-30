@@ -4,6 +4,7 @@ MedSeg-3D-KO Gradio 앱 — 클리니컬 대시보드 버전
 from __future__ import annotations
 
 from datetime import datetime
+import re
 import sys
 import os
 
@@ -264,9 +265,32 @@ def _make_results_html(assessments: list) -> str:
     return "<div>" + "".join(cards) + "</div>"
 
 
+# M3D가 붙이는 투두 문구 패턴 (번역 전 영문 단계에서 제거)
+_LLM_BOILERPLATE = re.compile(
+    r"^(Sure[,!]?\s*|Of course[,!]?\s*|Certainly[,!]?\s*"
+    r"|Absolutely[,!]?\s*|Yes[,!]?\s*|The target is\s+"
+    r"|The category is\s+|It is\s+|I can help\s+with that[.]\s*"
+    r"|Based on the (image|scan|medical image)[,]?\s*)",
+    re.IGNORECASE,
+)
+
+
+def _clean_llm_en(text: str) -> str:
+    """M3D 영문 출력에서 투두 문구를 제거하고 첫 문장을 정리."""
+    text = text.strip()
+    for _ in range(4):
+        cleaned = _LLM_BOILERPLATE.sub("", text).strip()
+        if cleaned == text:
+            break
+        text = cleaned
+    # 첫 글자 대문자 보정
+    return text[:1].upper() + text[1:] if text else text
+
+
 def _translate_and_clean(answer_en: str) -> str:
-    """영문 M3D 출력 → 한국어 번역 → 의학 용어 정리."""
-    ko = _translate_en_to_ko(answer_en)
+    """영문 M3D 출력 → 투두 문구 제거 → 한국어 번역 → 의학 용어 정리."""
+    cleaned = _clean_llm_en(answer_en)
+    ko = _translate_en_to_ko(cleaned)
     return _translator.translate_response(ko)
 
 
@@ -283,8 +307,11 @@ def _make_answer_html(mode: str, text: str) -> str:
     return (
         f"<div style='background:{bg};border:1px solid {color};border-radius:8px;"
         f"padding:14px 16px;margin-bottom:8px;'>"
-        f"<div style='color:{color};font-size:0.8rem;font-weight:700;margin-bottom:8px;'>"
-        f"{icon}</div>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center;"
+        f"margin-bottom:8px;'>"
+        f"<span style='color:{color};font-size:0.8rem;font-weight:700;'>{icon}</span>"
+        f"<span style='color:#475569;font-size:0.72rem;'>⚠ AI 생성 — 임상의 확인 필요</span>"
+        f"</div>"
         f"<div style='color:#e2e8f0;font-size:0.88rem;line-height:1.8;"
         f"white-space:pre-wrap;'>{safe}</div></div>"
     )
