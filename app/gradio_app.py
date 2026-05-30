@@ -636,8 +636,10 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
         alpha=alpha, wl=wl, ww=ww, label_names=None,
     )
     panel_arr = make_panel(seg_views_dict)
+    mask_models = {org: res["mask_model"] for org, res in zip(organs, results) if org}
     _last_inference.update({"organ_results": organ_results, "panel_image": panel_arr,
-                             "combined_mask": combined_mask, "label_names": label_names})
+                             "combined_mask": combined_mask, "label_names": label_names,
+                             "mask_models": mask_models})
     try:
         parsed = _parse_rrn(rrn or "")
         birth_year = parsed["birth_year"] if parsed else None
@@ -658,14 +660,16 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
     )
     yield _emit("🔬 2/4 — 영역 설명 생성 중…")
 
-    # ── 2/4 REG ──────────────────────────────────────────────────────────────
-    for org in organs:
+    # ── 2/4 REG (mask_model → loc 토큰 방식 우선) ────────────────────────────
+    for org, res in zip(organs, results):
         if not org:
             continue
+        mask_model = res.get("mask_model")
         try:
+            answer_en = pipeline.run_reg_with_loc_tokens(_current_volume, mask_model, org)
             state["_reg_texts"].append((
                 get_korean_term(org),
-                _translate_and_clean(pipeline.run_reg(_current_volume, org)),
+                _translate_and_clean(answer_en),
             ))
         except Exception:
             pass
@@ -692,18 +696,17 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
 
 
 def run_reg_fn(organ_ko_label: str):
-    """선택된 장기 영역 설명 (REG)."""
+    """선택된 장기 영역 설명 (REG) — 마스크 loc 토큰 방식 우선 사용."""
     if not organ_ko_label or _current_volume is None:
         return ""
     if not _last_inference.get("label_names"):
         return "세그멘테이션을 먼저 실행해주세요."
-    # 레이블 이름에서 영문 추출 "간 (liver)" → "liver"
     organ_en = organ_ko_label.split("(")[-1].rstrip(")").strip() if "(" in organ_ko_label else organ_ko_label
+    mask_model = _last_inference.get("mask_models", {}).get(organ_en)
     try:
         pipeline = _get_pipeline()
-        answer_en = pipeline.run_reg(_current_volume, organ_en)
-        answer_ko = _translate_and_clean(answer_en)
-        return _make_answer_html("reg", answer_ko)
+        answer_en = pipeline.run_reg_with_loc_tokens(_current_volume, mask_model, organ_en)
+        return _make_answer_html("reg", _translate_and_clean(answer_en))
     except Exception as e:
         return f"오류: {e}"
 
@@ -739,7 +742,8 @@ def _seg_for_display(
             alpha=alpha, wl=wl, ww=ww, label_names=None,
         )
         # REG 버튼 드롭다운 작동을 위해 _last_inference 업데이트
-        _last_inference.update({"combined_mask": combined, "label_names": label_names})
+        _last_inference.update({"combined_mask": combined, "label_names": label_names,
+                                 "mask_models": {organ_en: res["mask_model"]}})
         return (
             *_views_to_pil(views),
             _make_legend_html(label_names),
@@ -910,11 +914,13 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
     )
     panel_arr = make_panel(views)
 
+    _mask_models_full = {org: res["mask_model"] for org, res in zip(organs, results) if org}
     _last_inference.update({
         "organ_results": organ_results,
         "panel_image": panel_arr,
         "combined_mask": combined_mask,
         "label_names": label_names,
+        "mask_models": _mask_models_full,
     })
 
     # DB 저장

@@ -26,6 +26,32 @@ _CAPTION_INTENT = re.compile(
 )
 
 
+_LOC_BINS = 256  # M3D location token 개수 (0~255)
+
+
+def _mask_to_loc_tokens(mask_model: np.ndarray) -> str | None:
+    """
+    3D 마스크(모델 입력 공간 32×256×256)에서 바운딩박스를 추출하고
+    M3D <loc_N> 토큰 문자열로 변환.
+
+    반환 형식: "<loc_x1><loc_y1><loc_z1><loc_x2><loc_y2><loc_z2>"
+    좌표 순서: (x=W축, y=H축, z=D축) — PosREG 템플릿 기준
+    """
+    coords = np.where(mask_model)
+    if len(coords[0]) == 0:
+        return None
+    D, H, W = mask_model.shape
+    z1, z2 = int(coords[0].min()), int(coords[0].max())
+    y1, y2 = int(coords[1].min()), int(coords[1].max())
+    x1, x2 = int(coords[2].min()), int(coords[2].max())
+
+    def q(v: int, dim: int) -> int:
+        return min(int(v / dim * _LOC_BINS), _LOC_BINS - 1)
+
+    return (f"<loc_{q(x1,W)}><loc_{q(y1,H)}><loc_{q(z1,D)}>"
+            f"<loc_{q(x2,W)}><loc_{q(y2,H)}><loc_{q(z2,D)}>")
+
+
 def detect_intent(question_ko: str) -> str:
     """질문 의도 분류: 'seg' | 'caption' | 'vqa'"""
     if _SEG_INTENT.search(question_ko):
@@ -169,6 +195,44 @@ class SegmentationPipeline:
             .to(dtype=dtype, device=self._device)
         )
         return image_pt, original
+
+    def _has_loc_tokens(self) -> bool:
+        """토크나이저에 <loc_N> 특수 토큰이 등록되어 있는지 확인."""
+        unk_id = self.tokenizer.unk_token_id
+        test_id = self.tokenizer.convert_tokens_to_ids("<loc_0>")
+        return test_id != unk_id
+
+    def run_reg_with_loc_tokens(
+        self,
+        image_np: np.ndarray,
+        mask_model: np.ndarray | None,
+        organ_en: str = "",
+        max_new_tokens: int = 384,
+    ) -> str:
+        """
+        마스크 바운딩박스를 <loc_N> 토큰으로 변환해 REG 수행.
+        토크나이저에 loc 토큰이 없거나 마스크가 없으면 텍스트 프롬프트로 폴백.
+        """
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다.")
+        image_pt, _ = self._prepare_image_pt(image_np)
+
+        loc_str = _mask_to_loc_tokens(mask_model) if mask_model is not None else None
+
+        if loc_str and self._has_loc_tokens():
+            prompt_en = (
+                f"Please describe the target and its function "
+                f"based on the box {loc_str} in the image."
+            )
+        else:
+            # 폴백: 텍스트 좌표 프롬프트
+            organ_part = f"the {organ_en}" if organ_en else "the highlighted region"
+            prompt_en = (
+                f"Describe the appearance and condition of {organ_part} "
+                f"visible in this scan. Note its size, shape, and any abnormalities."
+            )
+
+        return self._generate_text_only(image_pt, prompt_en, max_new_tokens)
 
     def run_with_prompt(
         self,
