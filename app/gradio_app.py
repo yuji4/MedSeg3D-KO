@@ -16,9 +16,9 @@ from PIL import Image
 
 from src.inference.model_loader import ModelConfig, get_colab_config
 from src.inference.segmentation import (
-    SegmentationPipeline, _detect_organs_en,
-    detect_intent, _translate_en_to_ko,
+    SegmentationPipeline, _detect_organs_en, _translate_en_to_ko,
 )
+from src.translation.pipeline import KoreanMedicalQueryPipeline, Intent, SEG_TEMPLATE
 from src.analysis.volume import analyze_mask
 from src.analysis.clinical import assess_organ, format_clinical_summary
 from src.analysis.report import generate_report
@@ -53,6 +53,7 @@ _setup_korean_font()
 # ── 전역 상태 ──────────────────────────────────────────────────────────────────
 _pipeline: SegmentationPipeline | None = None
 _translator = MedicalTranslator()
+_query_pipeline = KoreanMedicalQueryPipeline()
 _current_volume: np.ndarray | None = None
 _current_spacing: tuple[float, float, float] = (1.0, 1.0, 1.0)
 _last_inference: dict = {}
@@ -289,6 +290,25 @@ def _make_answer_html(mode: str, text: str) -> str:
     )
 
 
+_INTENT_COLOR = {
+    "세그멘테이션":   "#3b82f6",
+    "VQA (질의응답)": "#8b5cf6",
+    "소견 생성":      "#22c55e",
+    "영역 설명":      "#06b6d4",
+}
+
+
+def _make_intent_html(intent_ko: str, organ_ko: str = "") -> str:
+    color = _INTENT_COLOR.get(intent_ko, "#64748b")
+    organ_part = f" — {organ_ko}" if organ_ko else ""
+    return (
+        f"<div style='padding:4px 12px;background:#1e293b;"
+        f"border:1px solid {color};border-radius:20px;display:inline-block;"
+        f"font-size:0.78rem;color:{color};margin:4px 0;'>"
+        f"💡 감지된 의도: <b>{intent_ko}</b>{organ_part}</div>"
+    )
+
+
 def _make_status_html(msg: str) -> str:
     if not msg:
         return ""
@@ -472,6 +492,8 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
 
     _hdr = lambda s: _make_header_html(patient_name, exam_date, s)
 
+    # 파이프라인으로 의도 분류
+    qp = _query_pipeline.transform(question_ko)
     state = dict(
         views=(None, None, None),
         legend=_make_legend_html({}),
@@ -480,6 +502,10 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
         vol="", clin="",
         organs=[],
         vqa="", caption="", reg="",
+        intent_html=_make_intent_html(
+            qp["intent_ko"],
+            get_korean_term(qp["organ"]) if qp["organ"] else "",
+        ),
     )
 
     def _emit(status=""):
@@ -491,6 +517,7 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
             gr.update(choices=state["organs"], value=org_val),
             _make_status_html(status),
             state["vqa"], state["caption"], state["reg"],
+            state["intent_html"],
         )
 
     if _current_volume is None:
@@ -524,7 +551,11 @@ def run_full_analysis(question_ko, slice_idx, alpha, wl, ww, mask_on,
             organs = [results[0]["organ_label"] or ""]
         else:
             image_pt, original = pipeline._prepare_image_pt(_current_volume)
-            results = [pipeline._infer(image_pt, original, org, question_ko) for org in organs]
+            results = [
+                pipeline._infer(image_pt, original, org, question_ko,
+                                prompt_en=SEG_TEMPLATE.format(organ=org))
+                for org in organs
+            ]
     except Exception as e:
         yield _emit(f"❌ 세그멘테이션 오류: {e}")
         return
@@ -651,70 +682,105 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
     _blank = (*_empty_views, _make_legend_html({}), _make_results_html([]))
 
     if _current_volume is None:
-        return (*_blank, _hdr("idle"), "", "", "", gr.update(choices=[]))
+        return (*_blank, _hdr("idle"), "", "", "", gr.update(choices=[]), "")
     if not question_ko.strip():
-        return (*_blank, _hdr("loaded"), "", "", "", gr.update(choices=[]))
+        return (*_blank, _hdr("loaded"), "", "", "", gr.update(choices=[]), "")
 
     try:
         pipeline = _get_pipeline()
     except Exception as e:
-        return (*_blank, _hdr("idle"), "", "", f"모델 로드 실패: {e}", gr.update(choices=[]))
+        return (*_blank, _hdr("idle"), "", "", f"모델 로드 실패: {e}", gr.update(choices=[]), "")
 
-    intent = detect_intent(question_ko)
+    # ── Layer 1-3: 의도 분류 + 엔티티 정규화 + 템플릿 선택 ────────────────────
+    qp = _query_pipeline.transform(question_ko)
+    intent     = qp["intent"]
+    organ_en   = qp["organ"]
+    prompt_en  = qp["prompt"]
+    intent_ko  = qp["intent_ko"]
+    intent_html_val = _make_intent_html(
+        intent_ko, get_korean_term(organ_en) if organ_en else ""
+    )
+
+    D = _current_volume.shape[0]
+    _plain_views = lambda: get_slice_views(
+        _current_volume, None,
+        slice_indices={"axial": D // 2,
+                       "sagittal": _current_volume.shape[2] // 2,
+                       "coronal": _current_volume.shape[1] // 2},
+    )
 
     # ── VQA 분기 ────────────────────────────────────────────────────────────
-    if intent == "vqa":
+    if intent == Intent.VQA:
         try:
-            answer_en = pipeline.run_vqa(_current_volume, question_ko)
-            answer_ko = _translate_and_clean(answer_en)
+            answer_ko = _translate_and_clean(
+                pipeline.run_with_prompt(_current_volume, prompt_en)
+            )
         except Exception as e:
             answer_ko = f"VQA 오류: {e}"
-        D = _current_volume.shape[0]
-        views = get_slice_views(_current_volume, None,
-                                slice_indices={"axial": D // 2,
-                                               "sagittal": _current_volume.shape[2] // 2,
-                                               "coronal": _current_volume.shape[1] // 2})
         return (
-            *_views_to_pil(views),
+            *_views_to_pil(_plain_views()),
             _make_legend_html({}),
             _make_answer_html("vqa", answer_ko),
             _hdr("done_ok"),
             "", answer_ko, "",
             gr.update(choices=[]),
+            intent_html_val,
         )
 
     # ── 소견 생성 분기 ────────────────────────────────────────────────────────
-    if intent == "caption":
+    if intent == Intent.REPORT:
         try:
-            answer_en = pipeline.run_caption(_current_volume)
-            answer_ko = _translate_and_clean(answer_en)
+            answer_ko = _translate_and_clean(
+                pipeline.run_with_prompt(_current_volume, prompt_en)
+            )
         except Exception as e:
             answer_ko = f"소견 생성 오류: {e}"
-        D = _current_volume.shape[0]
-        views = get_slice_views(_current_volume, None,
-                                slice_indices={"axial": D // 2,
-                                               "sagittal": _current_volume.shape[2] // 2,
-                                               "coronal": _current_volume.shape[1] // 2})
         return (
-            *_views_to_pil(views),
+            *_views_to_pil(_plain_views()),
             _make_legend_html({}),
             _make_answer_html("caption", answer_ko),
             _hdr("done_ok"),
             "", answer_ko, "",
             gr.update(choices=[]),
+            intent_html_val,
         )
 
-    # ── 세그멘테이션 분기 ────────────────────────────────────────────────────
+    # ── REG 분기 ─────────────────────────────────────────────────────────────
+    if intent == Intent.REG:
+        try:
+            answer_ko = _translate_and_clean(
+                pipeline.run_with_prompt(_current_volume, prompt_en)
+            )
+        except Exception as e:
+            answer_ko = f"영역 설명 오류: {e}"
+        return (
+            *_views_to_pil(_plain_views()),
+            _make_legend_html({}),
+            _make_answer_html("reg", answer_ko),
+            _hdr("done_ok"),
+            "", answer_ko, "",
+            gr.update(choices=[]),
+            intent_html_val,
+        )
+
+    # ── 세그멘테이션 분기 (검증된 SEG_TEMPLATE 사용) ─────────────────────────
     organs = _detect_organs_en(question_ko)
+    if not organs and organ_en:
+        organs = [organ_en]
     try:
         if not organs:
             results = [pipeline.run(_current_volume, question_ko)]
             organs = [results[0]["organ_label"] or ""]
         else:
             image_pt, original = pipeline._prepare_image_pt(_current_volume)
-            results = [pipeline._infer(image_pt, original, org, question_ko) for org in organs]
+            results = [
+                pipeline._infer(image_pt, original, org, question_ko,
+                                prompt_en=SEG_TEMPLATE.format(organ=org))
+                for org in organs
+            ]
     except Exception as e:
-        return (*_blank, _hdr("loaded"), "", "", f"추론 오류: {e}", gr.update(choices=[]))
+        return (*_blank, _hdr("loaded"), "", "", f"추론 오류: {e}",
+                gr.update(choices=[]), intent_html_val)
 
     combined_mask = np.zeros(_current_volume.shape, dtype=np.uint8)
     label_names: dict[int, str] = {}
@@ -789,6 +855,7 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         format_clinical_summary(assessments, age=int(age), sex=sex),
         "",
         gr.update(choices=organ_choices, value=organ_choices[0] if organ_choices else None),
+        intent_html_val,
     )
 
 
@@ -1038,6 +1105,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                             value="🗑️ 초기화", scale=1,
                         )
 
+                    intent_html = gr.HTML(value="")
                     gr.Examples(examples=EXAMPLES_Q, inputs=[question_input], label="예시 질문")
 
                 # ── 우측: 결과 패널 ─────────────────────────────────────────────
@@ -1093,12 +1161,14 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
             _RUN_OUT  = [axial_img, sagittal_img, coronal_img,
                          legend_html, results_html, header_html,
-                         volume_box, clinical_box, reg_answer_html, organ_select]
+                         volume_box, clinical_box, reg_answer_html, organ_select,
+                         intent_html]
             _FULL_OUT = [axial_img, sagittal_img, coronal_img,
                          legend_html, results_html, header_html,
                          volume_box, clinical_box,
                          organ_select, pipeline_status_html,
-                         vqa_html, caption_html, reg_all_html]
+                         vqa_html, caption_html, reg_all_html,
+                         intent_html]
             _FULL_IN  = [question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
                          mask_toggle, age_input, sex_input,
                          patient_name_input, exam_date_input, doctor_notes_input, rrn_input]

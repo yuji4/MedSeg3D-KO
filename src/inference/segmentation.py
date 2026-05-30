@@ -170,20 +170,34 @@ class SegmentationPipeline:
         )
         return image_pt, original
 
+    def run_with_prompt(
+        self,
+        image_np: np.ndarray,
+        prompt_en: str,
+        max_new_tokens: int = 512,
+    ) -> str:
+        """사전 생성된 영문 프롬프트로 텍스트 답변만 생성 (VQA / REG / Report 용)."""
+        if not self.is_loaded:
+            raise RuntimeError("모델이 로드되지 않았습니다.")
+        image_pt, _ = self._prepare_image_pt(image_np)
+        return self._generate_text_only(image_pt, prompt_en, max_new_tokens)
+
     def _infer(
         self,
         image_pt: torch.Tensor,
         original: np.ndarray,
         organ_en: str,
         question_ko: str = "",
+        prompt_en: str | None = None,
         max_new_tokens: int = 256,
         do_sample: bool = False,
         top_p: float | None = None,
         temperature: float = 1.0,
     ) -> dict:
         """전처리된 텐서로 단일 장기 추론. run / run_single 공통 내부 로직."""
-        question_en = _build_english_prompt(question_ko, organ_en=organ_en)
-        prompt = "<im_patch>" * PROJ_OUT_NUM + question_en
+        if prompt_en is None:
+            prompt_en = _build_english_prompt(question_ko, organ_en=organ_en)
+        prompt = "<im_patch>" * PROJ_OUT_NUM + prompt_en
         input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"].to(self._device)
 
         with torch.no_grad():
