@@ -217,7 +217,7 @@ class SegmentationPipeline:
         mask = self._resize_mask(mask_model, orig_shape)
 
         return {
-            "question_en": question_en,
+            "question_en": prompt_en,
             "answer_en": answer_en,
             "organ_label": organ_en,
             "mask": mask,

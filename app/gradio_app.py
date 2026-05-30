@@ -664,6 +664,48 @@ def run_reg_fn(organ_ko_label: str):
         return f"오류: {e}"
 
 
+def _seg_for_display(
+    pipeline: SegmentationPipeline,
+    organ_en: str | None,
+    alpha: float, wl: float, ww: float, mask_on: bool,
+) -> tuple:
+    """
+    VQA / Report / REG 모드에서 장기 마스크를 함께 렌더링.
+    Returns: (ax, sag, cor, legend_html_val, organ_choices)
+    """
+    D, H, W = _current_volume.shape
+    plain_idx = {"axial": D // 2, "sagittal": W // 2, "coronal": H // 2}
+
+    if not organ_en or not mask_on:
+        views = get_slice_views(_current_volume, None, plain_idx)
+        return (*_views_to_pil(views), _make_legend_html({}), [])
+
+    try:
+        image_pt, original = pipeline._prepare_image_pt(_current_volume)
+        res = pipeline._infer(image_pt, original, organ_en, "",
+                              prompt_en=SEG_TEMPLATE.format(organ=organ_en))
+        combined = np.zeros(_current_volume.shape, dtype=np.uint8)
+        combined[res["mask"]] = 1
+        label_names = {1: get_korean_term(organ_en)}
+
+        chosen_idx = _best_slice_index(combined > 0)
+        views = get_slice_views(
+            _current_volume, combined,
+            {"axial": chosen_idx, "sagittal": W // 2, "coronal": H // 2},
+            alpha=alpha, wl=wl, ww=ww, label_names=None,
+        )
+        # REG 버튼 드롭다운 작동을 위해 _last_inference 업데이트
+        _last_inference.update({"combined_mask": combined, "label_names": label_names})
+        return (
+            *_views_to_pil(views),
+            _make_legend_html(label_names),
+            [f"{get_korean_term(organ_en)} ({organ_en})"],
+        )
+    except Exception:
+        views = get_slice_views(_current_volume, None, plain_idx)
+        return (*_views_to_pil(views), _make_legend_html({}), [])
+
+
 def on_rrn_change(rrn: str):
     """주민등록번호 입력 시 나이·성별 자동 채우기."""
     parsed = _parse_rrn(rrn)
@@ -701,14 +743,6 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         intent_ko, get_korean_term(organ_en) if organ_en else ""
     )
 
-    D = _current_volume.shape[0]
-    _plain_views = lambda: get_slice_views(
-        _current_volume, None,
-        slice_indices={"axial": D // 2,
-                       "sagittal": _current_volume.shape[2] // 2,
-                       "coronal": _current_volume.shape[1] // 2},
-    )
-
     # ── VQA 분기 ────────────────────────────────────────────────────────────
     if intent == Intent.VQA:
         try:
@@ -717,13 +751,15 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
             )
         except Exception as e:
             answer_ko = f"VQA 오류: {e}"
+        ax, sag, cor, legend_val, org_ch = _seg_for_display(
+            pipeline, organ_en, alpha, wl, ww, mask_on
+        )
         return (
-            *_views_to_pil(_plain_views()),
-            _make_legend_html({}),
+            ax, sag, cor, legend_val,
             _make_answer_html("vqa", answer_ko),
             _hdr("done_ok"),
             "", answer_ko, "",
-            gr.update(choices=[]),
+            gr.update(choices=org_ch, value=org_ch[0] if org_ch else None),
             intent_html_val,
         )
 
@@ -735,13 +771,15 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
             )
         except Exception as e:
             answer_ko = f"소견 생성 오류: {e}"
+        ax, sag, cor, legend_val, org_ch = _seg_for_display(
+            pipeline, organ_en, alpha, wl, ww, mask_on
+        )
         return (
-            *_views_to_pil(_plain_views()),
-            _make_legend_html({}),
+            ax, sag, cor, legend_val,
             _make_answer_html("caption", answer_ko),
             _hdr("done_ok"),
             "", answer_ko, "",
-            gr.update(choices=[]),
+            gr.update(choices=org_ch, value=org_ch[0] if org_ch else None),
             intent_html_val,
         )
 
@@ -753,13 +791,15 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
             )
         except Exception as e:
             answer_ko = f"영역 설명 오류: {e}"
+        ax, sag, cor, legend_val, org_ch = _seg_for_display(
+            pipeline, organ_en, alpha, wl, ww, mask_on
+        )
         return (
-            *_views_to_pil(_plain_views()),
-            _make_legend_html({}),
+            ax, sag, cor, legend_val,
             _make_answer_html("reg", answer_ko),
             _hdr("done_ok"),
             "", answer_ko, "",
-            gr.update(choices=[]),
+            gr.update(choices=org_ch, value=org_ch[0] if org_ch else None),
             intent_html_val,
         )
 
