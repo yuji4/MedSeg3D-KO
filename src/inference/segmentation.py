@@ -77,13 +77,19 @@ def _translate_en_to_ko(text: str) -> str:
 
 
 def _detect_organs_en(question_ko: str) -> list[str]:
-    """한국어 질문에서 장기 영문명을 모두 추출 (긴 이름 우선, 중복 제거)."""
+    """
+    한국어 질문에서 장기 영문명 추출 (긴 이름 우선).
+    매칭된 한국어 텍스트를 제거한 뒤 다음 후보를 찾아 중첩 매칭 방지.
+    예: '좌측 폐' 매칭 후 '폐'→lungs 추가 매칭 방지.
+    """
     found: list[str] = []
     seen: set[str] = set()
+    remaining = question_ko
     for ko, en in sorted(_KO_TO_EN.items(), key=lambda x: len(x[0]), reverse=True):
-        if ko in question_ko and en not in seen:
+        if ko in remaining and en not in seen:
             found.append(en)
             seen.add(en)
+            remaining = remaining.replace(ko, " ", 1)
     return found
 
 
