@@ -57,6 +57,7 @@ _translator = MedicalTranslator()
 _query_pipeline = KoreanMedicalQueryPipeline()
 _current_volume: np.ndarray | None = None
 _current_spacing: tuple[float, float, float] = (1.0, 1.0, 1.0)
+_current_affine: np.ndarray | None = None   # NIfTI affine (마스크 저장용)
 _last_inference: dict = {}
 _SEX_MAP = {"남성": "male", "여성": "female", "미입력": "unknown"}
 _SEX_KO  = {"male": "남성", "female": "여성", "unknown": "미입력"}
@@ -474,12 +475,14 @@ def _views_to_pil(views: dict) -> tuple:
 
 # ── 파일 로드 ─────────────────────────────────────────────────────────────────
 def load_file(file_obj, patient_name, exam_date):
-    global _current_volume, _current_spacing
+    global _current_volume, _current_spacing, _current_affine
     _hdr = lambda s: _make_header_html(patient_name, exam_date, s)
     _blank = (None, None, None)
+    _sp_default = (1.0, 1.0, 1.0)  # spacing 입력 기본값 반환용
 
     if file_obj is None:
-        return (*_blank, "파일을 업로드해주세요.", _hdr("idle"), _make_legend_html({}))
+        return (*_blank, "파일을 업로드해주세요.", _hdr("idle"), _make_legend_html({}),
+                *_sp_default)
 
     path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
     try:
@@ -487,24 +490,28 @@ def load_file(file_obj, patient_name, exam_date):
             nii = nib.load(path)
             zooms = nii.header.get_zooms()
             _current_spacing = (float(zooms[2]), float(zooms[1]), float(zooms[0]))
-            _current_volume = nii.get_fdata().astype(np.float32).transpose(2, 1, 0)
+            _current_affine  = nii.affine.copy()
+            _current_volume  = nii.get_fdata().astype(np.float32).transpose(2, 1, 0)
         elif path.endswith(".npy"):
             arr = np.load(path)
-            _current_volume = arr[0] if arr.ndim == 4 else arr
+            _current_volume  = arr[0] if arr.ndim == 4 else arr
             _current_spacing = (1.0, 1.0, 1.0)
+            _current_affine  = None
         else:
             return (*_blank, f"지원하지 않는 형식: {os.path.basename(path)}",
-                    _hdr("idle"), _make_legend_html({}))
+                    _hdr("idle"), _make_legend_html({}), *_sp_default)
 
         views = get_slice_views(_current_volume)
         D, H, W = _current_volume.shape
         sp = _current_spacing
         msg = (f"✅ {os.path.basename(path)} | {D}×{H}×{W} voxels | "
                f"간격 {sp[0]:.2f}×{sp[1]:.2f}×{sp[2]:.2f} mm")
-        return (*_views_to_pil(views), msg, _hdr("loaded"), _make_legend_html({}))
+        return (*_views_to_pil(views), msg, _hdr("loaded"), _make_legend_html({}),
+                sp[0], sp[1], sp[2])
 
     except Exception as e:
-        return (*_blank, f"❌ 로드 실패: {e}", _hdr("idle"), _make_legend_html({}))
+        return (*_blank, f"❌ 로드 실패: {e}", _hdr("idle"), _make_legend_html({}),
+                1.0, 1.0, 1.0)
 
 
 
@@ -578,7 +585,8 @@ def on_rrn_change(rrn: str):
 
 
 def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
-                  age, sex_ko, patient_name, exam_date, doctor_notes, rrn):
+                  age, sex_ko, patient_name, exam_date, doctor_notes, rrn,
+                  sp_z=1.0, sp_y=1.0, sp_x=1.0):
     global _current_volume, _current_spacing, _last_inference
 
     _hdr  = lambda s: _make_header_html(patient_name, exam_date, s)
@@ -699,7 +707,8 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
 
     for lbl_idx, (org, res) in enumerate(zip(organs, results), start=1):
         organ_mask = combined_mask == lbl_idx
-        stats = analyze_mask(organ_mask, label=org, voxel_spacing_mm=_current_spacing)
+        spacing = (float(sp_z), float(sp_y), float(sp_x))
+        stats = analyze_mask(organ_mask, label=org, voxel_spacing_mm=spacing)
         present = stats.voxel_count > 0
         if present:
             any_detected = True
@@ -768,6 +777,25 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
 def _best_slice_index(mask: np.ndarray) -> int:
     counts = mask.sum(axis=(1, 2))
     return int(np.argmax(counts))
+
+
+def download_mask_fn(sp_z=1.0, sp_y=1.0, sp_x=1.0):
+    """세그멘테이션 마스크를 .nii.gz로 내보내기."""
+    import tempfile as _tmp
+    mask = _last_inference.get("combined_mask")
+    if mask is None:
+        return None
+    # NIfTI affine: NIfTI 파일이면 원본 affine, .npy면 spacing 기반 대각행렬
+    if _current_affine is not None:
+        affine = _current_affine
+    else:
+        s = (float(sp_z), float(sp_y), float(sp_x))
+        affine = np.diag([s[2], s[1], s[0], 1.0])  # x, y, z 간격
+    nii = nib.Nifti1Image(mask.transpose(2, 1, 0).astype(np.uint8), affine)
+    tmp = _tmp.NamedTemporaryFile(suffix=".nii.gz", delete=False, prefix="medseg_mask_")
+    nib.save(nii, tmp.name)
+    tmp.close()
+    return tmp.name
 
 
 def generate_pdf_report() -> tuple:
@@ -956,6 +984,19 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                             wl_slider = gr.Slider(-200, 400, value=40,  step=10,  label="윈도우 레벨 (HU)")
                             ww_slider = gr.Slider(100, 2000, value=400, step=50,  label="윈도우 너비 (HU)")
                         alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
+                        # CT 윈도우 프리셋
+                        with gr.Row():
+                            gr.HTML("<div style='color:#64748b;font-size:0.8rem;line-height:2.2;'>윈도우 프리셋:</div>")
+                            preset_abd  = gr.Button("복부",  size="sm", scale=1)
+                            preset_brain = gr.Button("뇌",   size="sm", scale=1)
+                            preset_lung  = gr.Button("폐",   size="sm", scale=1)
+                            preset_bone  = gr.Button("뼈",   size="sm", scale=1)
+                        # 복셀 간격 (부피 계산 정확도)
+                        gr.HTML("<div style='color:#64748b;font-size:0.78rem;margin-top:4px;'>복셀 간격 (mm) — .npy 파일 시 직접 입력</div>")
+                        with gr.Row():
+                            sp_z = gr.Number(label="D (z)", value=1.0, minimum=0.01, step=0.01, scale=1)
+                            sp_y = gr.Number(label="H (y)", value=1.0, minimum=0.01, step=0.01, scale=1)
+                            sp_x = gr.Number(label="W (x)", value=1.0, minimum=0.01, step=0.01, scale=1)
 
                     # 질문 + 실행 버튼
                     with gr.Row():
@@ -1034,6 +1075,11 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                         reg_btn = gr.Button("설명", variant="secondary", scale=1)
                     reg_answer_html = gr.HTML(value="")
 
+                    # 마스크 다운로드
+                    with gr.Row():
+                        mask_dl_btn  = gr.Button("💾 마스크 저장", variant="secondary", scale=1)
+                        mask_dl_file = gr.File(label="마스크 (.nii.gz)", scale=2)
+
                     # PDF
                     with gr.Row():
                         pdf_btn    = gr.Button("📄 PDF", variant="secondary", scale=1)
@@ -1042,11 +1088,16 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                                             visible=False)
 
             # ── 이벤트 연결 ─────────────────────────────────────────────────────
-            _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
+            _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html,
+                         legend_html, sp_z, sp_y, sp_x]
             _RUN_OUT  = [axial_img, sagittal_img, coronal_img,
                          legend_html, results_html, header_html,
                          volume_box, clinical_box, reg_answer_html, organ_select,
                          intent_html]
+            _RUN_IN   = [question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
+                         mask_toggle, age_input, sex_input,
+                         patient_name_input, exam_date_input, doctor_notes_input, rrn_input,
+                         sp_z, sp_y, sp_x]
             _VIEW_OUT = [axial_img, sagittal_img, coronal_img]
             _CTRL_IN  = [slice_slider, alpha_slider, wl_slider, ww_slider, mask_toggle]
 
@@ -1067,16 +1118,41 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                     outputs=[header_html],
                 )
             run_btn.click(
+                fn=lambda: _make_status_html("⏳ 추론 중… (10~30초 소요)"),
+                outputs=[pipeline_status_html],
+            ).then(
                 fn=run_inference,
-                inputs=[question_input, slice_slider, alpha_slider, wl_slider, ww_slider,
-                        mask_toggle, age_input, sex_input,
-                        patient_name_input, exam_date_input, doctor_notes_input, rrn_input],
+                inputs=_RUN_IN,
                 outputs=_RUN_OUT,
+            ).then(
+                fn=lambda: _make_status_html(""),
+                outputs=[pipeline_status_html],
             )
+
             pdf_btn.click(
                 fn=generate_pdf_report,
                 outputs=[pdf_output, pdf_status],
             )
+
+            mask_dl_btn.click(
+                fn=download_mask_fn,
+                inputs=[sp_z, sp_y, sp_x],
+                outputs=[mask_dl_file],
+            )
+
+            # CT 윈도우 프리셋
+            def _mk_preset(wl, ww):
+                return lambda: (wl, ww)
+            for btn, (wl, ww) in [
+                (preset_abd,   (40,    400)),
+                (preset_brain, (35,    80)),
+                (preset_lung,  (-600, 1500)),
+                (preset_bone,  (400,  1500)),
+            ]:
+                btn.click(fn=_mk_preset(wl, ww),
+                          outputs=[wl_slider, ww_slider]).then(
+                    fn=update_preview, inputs=_CTRL_IN, outputs=_VIEW_OUT
+                )
             reg_btn.click(
                 fn=run_reg_fn,
                 inputs=[organ_select],
