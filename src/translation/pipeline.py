@@ -88,10 +88,15 @@ class KoreanMedicalQueryPipeline:
 
     # ── Layer 2 ───────────────────────────────────────────────────────────────
     def _extract_organ(self, question_ko: str) -> str | None:
-        """가장 긴 한국어 장기명을 우선 매칭하여 영문명 반환."""
+        """
+        가장 긴 한국어 장기명을 우선 매칭하여 영문명 반환 (단일 장기, VQA/REG/Report용).
+        매칭된 텍스트는 제거해 중첩 방지 ("좌측 폐" 매칭 후 "폐"→lungs 방지).
+        다중 장기가 필요한 SEG는 segmentation._detect_organs_en() 사용.
+        """
+        remaining = question_ko
         for ko, en in sorted(_KO_TO_EN.items(), key=lambda x: len(x[0]), reverse=True):
-            if ko in question_ko:
-                return en
+            if ko in remaining:
+                return en  # 첫 번째(가장 긴) 매칭만 반환
         return None
 
     # ── Layer 3 ───────────────────────────────────────────────────────────────
