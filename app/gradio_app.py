@@ -1107,25 +1107,76 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
 
             with gr.Row(equal_height=False):
 
-                # ── 좌측 사이드바 ───────────────────────────────────────────────
-                with gr.Column(scale=1, min_width=290):
+                # ── 좌측: CT 뷰어 + 질문 ──────────────────────────────────────
+                with gr.Column(scale=4):
 
-                    with gr.Group():
-                        gr.Markdown("#### 👤 환자 정보")
-                        patient_name_input = gr.Textbox(
-                            label="환자 이름", placeholder="홍길동", lines=1,
+                    # CT 업로드
+                    with gr.Row():
+                        file_input = gr.File(
+                            label="CT 파일 (.nii.gz / .nii / .npy)",
+                            file_types=[".nii", ".gz", ".npy"],
+                            scale=3,
                         )
+                        load_status = gr.Textbox(
+                            label="로드 상태", interactive=False, lines=2, scale=2,
+                        )
+
+                    # CT 3방향 뷰
+                    with gr.Row(equal_height=True):
+                        axial_img    = gr.Image(show_label=False, type="pil", height=290)
+                        sagittal_img = gr.Image(show_label=False, type="pil", height=290)
+                        coronal_img  = gr.Image(show_label=False, type="pil", height=290)
+                    with gr.Row():
+                        gr.HTML("<div class='view-label'>축상면 (Axial)</div>")
+                        gr.HTML("<div class='view-label'>시상면 (Sagittal) ← 클릭</div>")
+                        gr.HTML("<div class='view-label'>관상면 (Coronal) ← 클릭</div>")
+                    legend_html = gr.HTML(value=_make_legend_html({}))
+
+                    # 뷰어 컨트롤 (접힘)
+                    with gr.Accordion("🎛️ 뷰어 컨트롤", open=False):
+                        with gr.Row():
+                            mask_toggle  = gr.Checkbox(label="마스크 오버레이", value=True, scale=1)
+                            slice_slider = gr.Slider(0, 31, value=0, step=1,
+                                                     label="축상 슬라이스 (0=자동)", scale=3)
+                        with gr.Row():
+                            wl_slider = gr.Slider(-200, 400, value=40,  step=10,  label="윈도우 레벨 (HU)")
+                            ww_slider = gr.Slider(100, 2000, value=400, step=50,  label="윈도우 너비 (HU)")
+                        alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
+
+                    # 질문 + 실행 버튼
+                    with gr.Row():
+                        question_input = gr.Textbox(
+                            label="질문",
+                            placeholder="간을 분할해줘 / 소견 생성해줘 / 이 CT가 정상인가요?",
+                            lines=1, scale=5,
+                        )
+                        run_btn     = gr.Button("🔬 실행",    variant="primary",    scale=1)
+                        run_all_btn = gr.Button("🚀 종합 분석", variant="secondary", scale=1)
+                        clear_btn   = gr.ClearButton(
+                            [file_input, question_input, doctor_notes_input],
+                            value="🗑️", scale=1,
+                        )
+                    intent_html = gr.HTML(value="")
+
+                # ── 우측: 환자 정보 + 분석 결과 ──────────────────────────────
+                with gr.Column(scale=3):
+
+                    # 환자 정보 (기본 접힘)
+                    with gr.Accordion("👤 환자 정보", open=False):
+                        with gr.Row():
+                            patient_name_input = gr.Textbox(
+                                label="이름", placeholder="홍길동", lines=1, scale=2,
+                            )
+                            exam_date_input = gr.Textbox(
+                                label="검사일",
+                                value=datetime.now().strftime("%Y-%m-%d"),
+                                lines=1, scale=2,
+                            )
                         rrn_input = gr.Textbox(
                             label="주민등록번호",
                             placeholder="000000-0000000",
-                            lines=1,
-                            type="password",
-                            info="입력 시 나이·성별 자동 입력 / 환자 고유 식별자",
-                        )
-                        exam_date_input = gr.Textbox(
-                            label="검사일 (YYYY-MM-DD)",
-                            value=datetime.now().strftime("%Y-%m-%d"),
-                            lines=1,
+                            lines=1, type="password",
+                            info="입력 시 나이·성별 자동 입력",
                         )
                         with gr.Row():
                             age_input = gr.Number(
@@ -1135,112 +1186,47 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                                 ["남성", "여성", "미입력"], label="성별", value="미입력",
                             )
                         doctor_notes_input = gr.Textbox(
-                            label="📝 의사 메모",
-                            placeholder="임상 소견, 특이사항 등 자유롭게 입력",
-                            lines=3,
-                            elem_id="notes_box",
+                            label="의사 메모",
+                            placeholder="임상 소견, 특이사항 등",
+                            lines=2, elem_id="notes_box",
                         )
 
-                    gr.Markdown("---")
-
-                    with gr.Group():
-                        gr.Markdown("#### 📂 CT 파일 업로드")
-                        file_input = gr.File(
-                            label="파일 선택 (.nii.gz / .nii / .npy)",
-                            file_types=[".nii", ".gz", ".npy"],
-                        )
-                        load_status = gr.Textbox(
-                            label="로드 상태", interactive=False, lines=2,
-                        )
-
-                # ── 중앙: CT 뷰어 ──────────────────────────────────────────────
-                with gr.Column(scale=3):
-
-                    with gr.Group():
-                        with gr.Row(equal_height=True):
-                            axial_img    = gr.Image(show_label=False, type="pil", height=270)
-                            sagittal_img = gr.Image(show_label=False, type="pil", height=270)
-                            coronal_img  = gr.Image(show_label=False, type="pil", height=270)
-                        with gr.Row():
-                            gr.HTML("<div class='view-label'>축상면 (Axial)</div>")
-                            gr.HTML("<div class='view-label'>시상면 (Sagittal) ← 클릭</div>")
-                            gr.HTML("<div class='view-label'>관상면 (Coronal) ← 클릭</div>")
-                        legend_html = gr.HTML(value=_make_legend_html({}))
-
-                    gr.Markdown("---")
-
-                    with gr.Accordion("🎛️ 뷰어 컨트롤", open=False):
-                        with gr.Row():
-                            mask_toggle = gr.Checkbox(
-                                label="마스크 오버레이", value=True, scale=1,
-                            )
-                            slice_slider = gr.Slider(
-                                0, 31, value=0, step=1, label="축상 슬라이스 (0=자동)", scale=3,
-                            )
-                        with gr.Row():
-                            wl_slider = gr.Slider(-200, 400, value=40, step=10, label="윈도우 레벨 (HU)")
-                            ww_slider = gr.Slider(100, 2000, value=400, step=50, label="윈도우 너비 (HU)")
-                        alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
-
-                    gr.Markdown("---")
-
-                    with gr.Row():
-                        question_input = gr.Textbox(
-                            label="한국어 질문",
-                            placeholder="예: 간을 분할해줘  /  신장이랑 비장 찾아줘  /  소견 생성해줘",
-                            lines=1, scale=4,
-                        )
-                        run_btn     = gr.Button("🔬 실행", variant="primary", scale=1)
-                        run_all_btn = gr.Button("🚀 종합 분석", variant="secondary", scale=1)
-                        clear_btn   = gr.ClearButton(
-                            [file_input, question_input, rrn_input, doctor_notes_input],
-                            value="🗑️ 초기화", scale=1,
-                        )
-
-                    intent_html = gr.HTML(value="")
-                    gr.Examples(examples=EXAMPLES_Q, inputs=[question_input], label="예시 질문")
-
-                # ── 우측: 결과 패널 ─────────────────────────────────────────────
-                with gr.Column(scale=2, min_width=280):
-
+                    # 진행 상태
                     pipeline_status_html = gr.HTML(value="")
 
-                    gr.Markdown("#### 📊 장기별 분석 결과")
+                    # 분석 결과
+                    gr.Markdown("#### 📊 분석 결과")
                     results_html = gr.HTML(
                         value=_make_results_html([]),
                         elem_classes=["card-scroll"],
                     )
 
-                    gr.Markdown("---")
-
+                    # 상세 정보 (접힘)
                     with gr.Accordion("📈 부피 상세 통계", open=False):
                         volume_box = gr.Textbox(
-                            label=None, lines=5, interactive=False, show_copy_button=True,
-                            elem_id="volume_box",
+                            label=None, lines=5, interactive=False,
+                            show_copy_button=True, elem_id="volume_box",
                         )
                     with gr.Accordion("🩺 임상 소견", open=False):
                         clinical_box = gr.Textbox(
-                            label=None, lines=7, interactive=False, show_copy_button=True,
-                            elem_id="clinical_box",
+                            label=None, lines=7, interactive=False,
+                            show_copy_button=True, elem_id="clinical_box",
                         )
-                    gr.Markdown("---")
 
-                    gr.Markdown("#### 🔬 개별 장기 설명")
+                    # 장기 설명 (REG)
                     with gr.Row():
                         organ_select = gr.Dropdown(
-                            label="세그멘테이션된 장기 선택",
-                            choices=[], interactive=True, scale=3,
+                            label="장기 설명 요청", choices=[], interactive=True, scale=3,
                         )
                         reg_btn = gr.Button("설명", variant="secondary", scale=1)
                     reg_answer_html = gr.HTML(value="")
 
-                    gr.Markdown("---")
-
+                    # PDF
                     with gr.Row():
-                        pdf_btn    = gr.Button("📄 PDF 생성", variant="secondary", scale=1)
-                        pdf_output = gr.File(label="PDF 다운로드", scale=2)
+                        pdf_btn    = gr.Button("📄 PDF", variant="secondary", scale=1)
+                        pdf_output = gr.File(label="다운로드", scale=3)
                     pdf_status = gr.Textbox(label=None, interactive=False, lines=1,
-                                            placeholder="PDF 생성 상태")
+                                            visible=False)
 
             # ── 이벤트 연결 ─────────────────────────────────────────────────────
             _LOAD_OUT = [axial_img, sagittal_img, coronal_img, load_status, header_html, legend_html]
