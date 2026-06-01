@@ -1153,7 +1153,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                         run_btn     = gr.Button("🔬 실행",    variant="primary",    scale=1)
                         run_all_btn = gr.Button("🚀 종합 분석", variant="secondary", scale=1)
                         clear_btn   = gr.ClearButton(
-                            [file_input, question_input, doctor_notes_input],
+                            [file_input, question_input],
                             value="🗑️", scale=1,
                         )
                     intent_html = gr.HTML(value="")
