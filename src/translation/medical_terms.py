@@ -155,6 +155,32 @@ TERM_KO = {
     "metastasectomie": "전이 절제술 부위",
 }
 
+# 구어체·비표준 한국어 → 정규 표현 변환 테이블
+# normalize_ko_query()에서 사용
+KO_NORMALIZE: dict[str, str] = {
+    # 방향 표현
+    "왼쪽": "좌측",
+    "오른쪽": "우측",
+    "왼": "좌측",
+    "오른": "우측",
+    # 구어체 장기명
+    "콩팥":  "신장",
+    "이자":  "췌장",
+    "지라":  "비장",
+    "허파":  "폐",
+    "염통":  "심장",
+    "쓸개":  "담낭",
+    "자궁관": "나팔관",
+}
+
+
+def normalize_ko_query(text: str) -> str:
+    """구어체·비표준 한국어 의학 표현을 정규 표현으로 치환."""
+    for variant, canonical in KO_NORMALIZE.items():
+        text = text.replace(variant, canonical)
+    return text
+
+
 DESCRIPTION_KO = {
     "liver": "간은 우상복부에 위치한 대형 장기로 해독, 담즙 생성, 포도당 저장 등 다양한 대사 기능을 수행합니다.",
     "spleen": "비장은 좌상복부에 위치하며 면역 기능 및 적혈구 여과에 관여합니다.",

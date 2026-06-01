@@ -7,7 +7,7 @@ import torch
 from monai.transforms import Resize
 
 from src.inference.model_loader import ModelConfig, PROJ_OUT_NUM, load_model
-from src.translation.medical_terms import TERM_KO
+from src.translation.medical_terms import TERM_KO, normalize_ko_query
 
 # 모델 입력 크기 고정값
 TARGET_SHAPE = (32, 256, 256)
@@ -79,12 +79,12 @@ def _translate_en_to_ko(text: str) -> str:
 def _detect_organs_en(question_ko: str) -> list[str]:
     """
     한국어 질문에서 장기 영문명 추출 (긴 이름 우선).
-    매칭된 한국어 텍스트를 제거한 뒤 다음 후보를 찾아 중첩 매칭 방지.
-    예: '좌측 폐' 매칭 후 '폐'→lungs 추가 매칭 방지.
+    구어체 정규화 후 매칭, 매칭된 텍스트 제거로 중첩 방지.
+    예: '왼쪽 폐' → '좌측 폐' 정규화 후 'left lung' 추출.
     """
     found: list[str] = []
     seen: set[str] = set()
-    remaining = question_ko
+    remaining = normalize_ko_query(question_ko)  # '왼쪽'→'좌측' 등 전처리
     for ko, en in sorted(_KO_TO_EN.items(), key=lambda x: len(x[0]), reverse=True):
         if ko in remaining and en not in seen:
             found.append(en)

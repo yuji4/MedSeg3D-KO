@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 
-from src.translation.medical_terms import TERM_KO
+from src.translation.medical_terms import TERM_KO, normalize_ko_query
 
 # ── 역방향 사전: 한국어 → 영문 ────────────────────────────────────────────────
 _KO_TO_EN: dict[str, str] = {v: k for k, v in TERM_KO.items()}
@@ -69,9 +69,10 @@ class KoreanMedicalQueryPipeline:
                 "prompt":    str,          # M3D 영문 프롬프트 (Layer 3)
             }
         """
-        intent   = self._classify_intent(question_ko)   # Layer 1
-        organ_en = self._extract_organ(question_ko)      # Layer 2
-        prompt   = self._select_template(intent, organ_en, question_ko)  # Layer 3
+        q        = normalize_ko_query(question_ko)         # 전처리: 구어체 정규화
+        intent   = self._classify_intent(q)              # Layer 1
+        organ_en = self._extract_organ(q)                # Layer 2
+        prompt   = self._select_template(intent, organ_en, question_ko)  # Layer 3 (번역엔 원문)
         return {
             "intent":    intent,
             "intent_ko": _INTENT_KO[intent],
