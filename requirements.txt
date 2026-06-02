@@ -16,6 +16,8 @@ tqdm>=4.66.2
 # 번역
 deep-translator>=1.11.4
 sentencepiece>=0.1.99
+google-generativeai>=0.7.0
+python-dotenv>=1.0.0
 
 # 시각화
 matplotlib>=3.8.4

@@ -61,11 +61,61 @@ def detect_intent(question_ko: str) -> str:
     return "vqa"
 
 
+_gemini_model = None
+
+
+def _get_gemini_model():
+    """Gemini 모델 lazy 초기화. API 키 없으면 None 반환."""
+    global _gemini_model
+    if _gemini_model is not None:
+        return _gemini_model
+
+    import os
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        _gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        return _gemini_model
+    except Exception:
+        return None
+
+
+_TRANSLATE_PROMPT = (
+    "다음은 의료 CT 영상 판독 결과입니다. "
+    "자연스러운 한국어 의학 표현으로 번역하세요. "
+    "번역문만 출력하고 다른 설명은 쓰지 마세요.\n\n"
+)
+
+
 def _translate_en_to_ko(text: str) -> str:
-    """영어 → 한국어 번역 (deep_translator). 실패 시 원문 반환."""
+    """영어 → 한국어 번역. Gemini 우선, 실패 시 GoogleTranslate fallback."""
+    if not text.strip():
+        return text
+
+    # Gemini 번역 시도
+    model = _get_gemini_model()
+    if model is not None:
+        try:
+            resp = model.generate_content(_TRANSLATE_PROMPT + text)
+            result = resp.text.strip()
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # Fallback: GoogleTranslate
     try:
         from deep_translator import GoogleTranslator
-        # GoogleTranslator 최대 5000자 제한
         if len(text) <= 4999:
             return GoogleTranslator(source="en", target="ko").translate(text)
         chunks = [text[i:i + 4999] for i in range(0, len(text), 4999)]
