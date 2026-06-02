@@ -255,6 +255,8 @@ def format_clinical_summary(
 
     lines = [
         f"=== 임상 평가 — {age}세 ({age_group}) / {sex_ko} ===",
+        "※ 세그멘테이션 마스크 기반 부피(mL) 측정값입니다.",
+        "  형태·밀도 이상 소견은 '장기 설명' 버튼을 이용하세요.",
         "",
     ]
 
