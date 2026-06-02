@@ -63,15 +63,70 @@ flowchart TD
 
 ## 주요 기능
 
-| | 기능 | 설명 |
-|--|------|------|
-| 🔍 | **한국어 자연어 질의** | SEG / VQA / REPORT / REG 4가지 태스크 자동 분류 |
-| 🫁 | **다장기 세그멘테이션** | 104종 해부학 구조물, 3방향 뷰 오버레이 |
-| 📊 | **임상 정량 분석** | 부피(mL)·크기(mm) 자동 계산, 정상범위 비교, 연령·성별 보정 |
-| 🏥 | **환자 관리** | SQLite 기반 검사 이력, 종단적 부피 추이 차트 (Plotly) |
-| 📄 | **PDF 보고서** | 3방향 이미지 + 결과표 + 한국어 면책 고지 |
+### 1. 한국어 자연어 질의
+
+4가지 M3D 태스크를 한국어로 자유롭게 요청할 수 있습니다. 3계층 파이프라인이 자동으로 의도를 분류하고 최적 프롬프트로 변환합니다.
+
+```
+"간 분할해줘"         → SEG    → Can you segment the liver in this image? Please output the mask.
+"췌장 상태 어때?"     → VQA    → What is the condition of the pancreas in this image?
+"소견서 써줘"         → REPORT → What are the main findings in this medical image?
+"비장 기능 설명해줘"  → REG    → Describe the appearance and condition of the spleen...
+```
+
+![Intent Classification](docs/images/intent_badge.png)
+
+---
+
+### 2. 다장기 3D 세그멘테이션
+
+104종 해부학 구조물을 한 번의 질문으로 동시에 세그멘테이션하고, 축상·시상·관상 3방향 슬라이스에 색상별로 오버레이합니다.
+
+- **윈도우 프리셋:** 복부 / 폐 / 뼈 / 뇌 4종 (HU 수동 조절 가능)
+- **마스크 다운로드:** NIfTI 형식 (.nii.gz), 원본 affine 정보 보존
 
 ![Segmentation](docs/images/segmentation.png)
+
+---
+
+### 3. 임상 정량 분석
+
+세그멘테이션 마스크에서 자동으로 임상 수치를 계산하고 성인 정상범위와 비교합니다.
+
+| 지표 | 설명 |
+|------|------|
+| 부피 (mL) | 복셀 크기 × 복셀 수 |
+| 크기 (mm) | 축별 바운딩박스 D × H × W |
+| 임상 상태 | 정상 ✅ / 초과 ⚠️ / 미만 ⚠️ (연령·성별 보정) |
+
+![Clinical Analysis](docs/images/clinical.png)
+
+---
+
+### 4. VQA / 소견 생성 / 영역 설명
+
+M3D의 멀티태스크 기능을 한국어로 지원합니다. 모델 출력은 한국어로 자동 번역됩니다.
+
+![VQA](docs/images/vqa.png)
+
+---
+
+### 5. 환자 관리 및 종단적 추이
+
+SQLite 기반 환자 정보 저장 및 장기 부피 변화 추이를 인터랙티브 차트로 확인할 수 있습니다.
+
+- 주민등록번호 자동 파싱 (나이/성별), 뒷자리 마스킹 `000000-*******`, 암호화 저장
+- CSV 내보내기 (전체 / 환자별)
+
+![Longitudinal](docs/images/longitudinal.png)
+
+---
+
+### 6. PDF 보고서 자동 생성
+
+3방향 CT 이미지 + 장기별 결과표 + 한국어 면책 고지를 포함한 PDF를 자동으로 생성합니다.
+
+![PDF Report](docs/images/pdf.png)
 
 ---
 
@@ -92,20 +147,22 @@ flowchart TD
 
 ## 핵심 실험 결과
 
+> 실험 전체 상세 (7종, 의도·가설·결과·종합 결론) → **[EXPERIMENT.md](EXPERIMENT.md)**
+
 ### 실험 1: 번역 전략 비교 — 왜 파이프라인이 필요한가
 
-> **한국어를 어떻게 M3D에 전달해야 하는가?** (n=5, Task07 췌장)
+> "한국어 입력을 그냥 번역기로 넘기면 안 되는가?" (n=5, Task07 췌장)
 
 | 방법 | Dice | 비고 |
 |------|:----:|------|
 | 한국어 직접 입력 | 0.0000 | `[SEG]` 토큰 미생성 |
 | 일반 번역 (GoogleTranslate) | 0.0000 | "Split the pancreas" → 실패 |
 | 의료 사전 정규화 (Layer 2만) | 0.5457 | 장기명만 맞춰도 급격히 회복 |
-| **3계층 Full 파이프라인** | **0.5515** | **최고 성능** |
+| **3계층 Full 파이프라인** | **0.5515** | 최고 성능 |
 
 ### 실험 2: Ablation Study — 각 계층이 정말 필요한가
 
-> **계층 하나씩 제거하면 성능이 어떻게 변하는가?** (n=5)
+> "계층을 하나씩 빼면 성능이 어떻게 변하는가?" (n=5)
 
 | 설정 | Dice | 해석 |
 |------|:----:|------|
@@ -114,9 +171,7 @@ flowchart TD
 | −Layer 2 (정규화 제거) | 0.0000 | 완전 실패 |
 | −Layer 3 (템플릿 제거) | 0.0000 | 완전 실패 |
 
-> 세 계층 모두 필수. **Layer 2 > Layer 3 > Layer 1** 순으로 기여도가 큽니다.
-
-→ 실험 전체 상세 (7종): **[EXPERIMENT.md](EXPERIMENT.md)**
+> **Layer 2 > Layer 3 > Layer 1** 순으로 기여도가 큽니다. 세 계층 모두 필수입니다.
 
 ---
 
@@ -143,10 +198,10 @@ MedSeg-3D-KO/
 │       ├── db.py              # SQLite 연결 및 초기화
 │       └── crud.py            # 환자 CRUD
 ├── notebooks/
-│   ├── m3d_KO_run.ipynb                                  # Colab 실행 스크립트
-│   ├── Med3D_Korean_Interface_Pipeline_Experiment.ipynb  # 실험 1~4
+│   ├── m3d_KO_run.ipynb                                      # Colab 실행 스크립트
+│   ├── Med3D_Korean_Interface_Pipeline_Experiment.ipynb      # 실험 1~4
 │   ├── Korean_Medical_Query_Transformation_Experiment.ipynb  # 실험 5~7
-│   └── M3D_KO_Prompt_Optimal.ipynb                       # 실험 4 (프롬프트 최적화)
+│   └── M3D_KO_Prompt_Optimal.ipynb                           # 실험 4 (프롬프트 최적화)
 ├── EXPERIMENT.md              # 실험 전체 상세
 └── requirements.txt
 ```
