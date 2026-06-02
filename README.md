@@ -2,7 +2,7 @@
 
 <div align="center">
 
-### 한국어로 CT를 물어보면, 장기를 세그멘테이션해서 임상 분석 결과를 드립니다
+### 한국어 의료 질의를 M3D-LaMed가 이해할 수 있는 프롬프트로 변환하는 3계층 파이프라인 연구 및 CT 세그멘테이션 시스템
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Gradio](https://img.shields.io/badge/Gradio-4.0+-orange)
@@ -19,15 +19,24 @@
 
 ## 개요
 
-M3D-LaMed는 영어 프롬프트로만 작동합니다. 한국어로 "췌장 분할해줘"라고 물으면 Dice Score **0.0000** — 완전히 실패합니다.
+M3D-LaMed는 영어 기반 데이터로 학습된 의료 VLM으로, 한국어 입력에 대한 동작이 공식적으로 검증되어 있지 않습니다.
 
-MedSeg-3D-KO는 **3계층 한국어 변환 파이프라인**을 실험으로 설계·검증하고, 이를 기반으로 한국어 질의 기반 CT 세그멘테이션 + 임상 분석 웹 앱을 구현한 프로젝트입니다.
+본 프로젝트는 한국어 의료 질의를 입력으로 사용할 때 발생하는 성능 저하를 분석하고, 이를 해결하기 위한 **3계층 한국어 변환 파이프라인**을 제안합니다.
 
 ```
 "간 분할해줘"  →  [3계층 파이프라인]  →  M3D-LaMed  →  3D 마스크 + 부피(mL) + 임상 평가
 ```
 
-한국 의료 현장에서 CT 분석 도구는 대부분 영어 전용입니다. 일반 번역기를 써도 M3D는 여전히 실패하며 (Dice 0.000), 의료 도메인 특화 정규화가 필수임을 7종의 실험으로 확인하고 최적 파이프라인을 설계했습니다.
+많은 공개 의료 VLM들이 영어 중심 데이터로 학습되어 있으며, 한국어 질의 지원에 대한 연구는 상대적으로 부족합니다. 일반 번역기를 사용해도 M3D는 여전히 실패하며 (Dice 0.000), 의료 도메인 특화 정규화가 필수임을 7종의 실험으로 확인하고 최적 파이프라인을 설계했습니다.
+
+---
+
+## Contributions
+
+1. 영어 전용 의료 VLM(M3D-LaMed)에 대해 한국어 질의 입력 실패 원인을 체계적으로 분석하였다. (토크나이저 파편화, 프롬프트 패턴 의존성)
+2. 의도 분류, 엔티티 정규화, 프롬프트 템플릿 선택으로 구성된 **3계층 한국어 변환 파이프라인**을 제안하였다.
+3. 7종의 실험을 통해 각 계층의 기여도를 정량적으로 검증하고, 계층 간 중요도를 ablation study로 측정하였다.
+4. 연구 결과를 실제 사용 가능한 CT 세그멘테이션 및 임상 분석 웹 애플리케이션으로 구현하였다.
 
 ---
 
@@ -42,7 +51,7 @@ MedSeg-3D-KO는 **3계층 한국어 변환 파이프라인**을 실험으로 설
 | Phi-3 LLM (4B) | 언어 이해 + `[SEG]` 토큰 생성 |
 | SAM 3D Decoder | `[SEG]` 토큰 → 3D 세그멘테이션 마스크 |
 
-단, 학습 데이터가 영어 기반이라 한국어 입력 시 Dice **0.0000**으로 완전 실패합니다. MedSeg-3D-KO는 이 문제를 3계층 파이프라인으로 해결합니다.
+학습 데이터가 영어 기반이라 한국어 입력 시 Dice **0.0000**으로 완전 실패합니다. MedSeg-3D-KO는 이 문제를 3계층 파이프라인으로 해결합니다.
 
 ---
 
@@ -55,7 +64,7 @@ flowchart TD
     subgraph PIPE["3계층 한국어 변환 파이프라인"]
         direction TB
         L1["Layer 1 — 의도 분류\nSEG · VQA · REPORT · REG"]
-        L2["Layer 2 — 엔티티 정규화\n췌장→pancreas  콩팥→kidney"]
+        L2["Layer 2 — 엔티티 정규화\n신장·콩팥·kidney → kidney"]
         L3["Layer 3 — 템플릿 선택\n검증된 M3D 영문 프롬프트 생성"]
         L1 --> L2 --> L3
     end
@@ -90,7 +99,19 @@ flowchart TD
 
 ### Layer 2가 핵심인 이유 — 토크나이저 분석
 
-M3D의 토크나이저는 Phi-3 기반으로 한국어에 최적화되어 있지 않습니다. 같은 의미라도 한국어는 영어보다 훨씬 많은 토큰으로 파편화되어 임베딩 공간에서 전혀 다른 표현이 됩니다.
+M3D의 토크나이저는 Phi-3 기반으로 한국어에 최적화되어 있지 않습니다. Layer 2는 표현이 달라도 같은 의미를 가진 한국어 장기명을 M3D 학습 어휘의 canonical form으로 정규화합니다.
+
+```
+"신장" ┐
+"콩팥" ┤ → kidney   (M3D 학습 어휘)
+"kidney" ┘
+
+"췌장" ┐
+"이자" ┤ → pancreas
+"pancreas" ┘
+```
+
+정규화 없이 한국어를 그대로 전달하면 토크나이저가 과도하게 파편화하여 임베딩 공간에서 전혀 다른 표현이 됩니다.
 
 | 한국어 | 영어 | 한국어 토큰 수 | 영어 토큰 수 |
 |--------|------|:---:|:---:|
@@ -151,8 +172,6 @@ REG    → "Describe the appearance and condition of the {organ} visible in this
 | 크기 (mm) | 축별 바운딩박스 D × H × W |
 | 임상 상태 | 정상 ✅ / 초과 ⚠️ / 미만 ⚠️ (연령·성별 보정) |
 
-정상범위는 해부학·영상의학 교과서 기반 성인 기준값을 사용합니다.
-
 | 장기 | 정상 범위 |
 |------|-----------|
 | 간 | 1,000 ~ 1,500 mL |
@@ -182,7 +201,7 @@ REG    → "Describe the appearance and condition of the {organ} visible in this
 
 ### 6. 영역 설명 (REG)
 
-특정 장기의 해부학적 구조, 기능, 이상 소견을 자세히 설명합니다. 의대생이나 의료진의 교육 목적으로도 활용 가능합니다.
+특정 장기의 해부학적 구조, 기능, 이상 소견을 자세히 설명합니다.
 
 ![Region Description](docs/images/reg.png)
 
@@ -226,9 +245,9 @@ SQLite 기반 환자 정보 저장 및 장기 부피 변화 추이를 인터랙�
 
 > 실험 전체 상세 (7종, 방법·결과·분석·종합 결론) → **[EXPERIMENT.md](EXPERIMENT.md)**
 
-### 실험 1: 번역 전략 비교 — 파이프라인이 필요한 이유
+본 실험은 개념 검증(Proof of Concept)을 목적으로 수행되었으며, 모든 실험은 동일한 5개 케이스에서 비교 평가하였습니다. (Task07 Pancreas, MSD)
 
-> n=5, Task07 췌장 (MSD)
+### 실험 1: 번역 전략 비교 — 파이프라인이 필요한 이유
 
 | 방법 | 평균 Dice | 비고 |
 |------|:---------:|------|
@@ -238,8 +257,6 @@ SQLite 기반 환자 정보 저장 및 장기 부피 변화 추이를 인터랙�
 | **3계층 Full 파이프라인** | **0.5515** | 최고 성능 |
 
 ### 실험 2: Ablation Study — 각 계층의 기여도
-
-> n=5
 
 | 설정 | 평균 Dice | 비고 |
 |------|:---------:|------|
@@ -333,16 +350,24 @@ MedSeg-3D-KO/
 
 ---
 
-## 실행 방법 (Google Colab)
+## Quick Start (Google Colab)
+
+1. `notebooks/m3d_KO_run.ipynb` 열기
+2. 셀 순서대로 실행 (모델 로드 약 5분)
+3. 생성된 공개 URL 접속
+4. CT 파일 업로드 후 한국어로 질문 입력
+
+<details>
+<summary>직접 실행 코드 보기</summary>
 
 ```python
 # 1. 레포 클론 및 패키지 설치
 !git clone https://github.com/yuji4/MedSeg3D-KO.git
 %cd MedSeg3D-KO
 !pip install -r requirements.txt
-!apt-get install -y fonts-nanum -q   # 한국어 폰트 (PDF 보고서용)
+!apt-get install -y fonts-nanum -q
 
-# 2. 모델 로드 (약 5분 소요)
+# 2. 모델 로드
 import sys, torch
 sys.path.insert(0, '/content/MedSeg3D-KO')
 
@@ -374,6 +399,8 @@ app_module.demo.launch(share=True)
 
 > ⚠️ T4 GPU 환경 권장.
 
+</details>
+
 ---
 
 ## 데이터셋
@@ -391,3 +418,9 @@ app_module.demo.launch(share=True)
 - [M3D GitHub](https://github.com/BAAI-DCAI/M3D)
 - [M3D-LaMed-Phi-3-4B (HuggingFace)](https://huggingface.co/GoodBaiBai88/M3D-LaMed-Phi-3-4B)
 - [Medical Segmentation Decathlon](http://medicaldecathlon.com/)
+
+---
+
+## Disclaimer
+
+본 프로젝트는 연구 및 교육 목적의 프로토타입입니다. 생성된 세그멘테이션 결과, 임상 수치, 보고서 및 질의응답 결과는 의학적 진단을 대체할 수 없으며, 실제 의료 행위에 사용되어서는 안 됩니다.
