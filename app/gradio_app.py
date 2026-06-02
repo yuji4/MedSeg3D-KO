@@ -136,6 +136,11 @@ footer { display: none; }
 /* 섹션 간격 */
 .section-gap { margin-top: 16px; }
 
+/* 다운로드 파일 컴포넌트 최소화 */
+.download-file { margin-top: 4px !important; }
+.download-file .wrap { padding: 4px 8px !important; background: #1e293b !important; border-radius: 6px !important; }
+.download-file .wrap a { color: #60a5fa !important; font-size: 0.82rem !important; }
+
 /* ── 데이터프레임 ── */
 /* Gradio 4.x: .table-wrap 안의 table */
 .table-wrap table { border-collapse: collapse; width: 100%; }
@@ -934,8 +939,8 @@ def export_patient_fn(patient_str: str):
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 EXAMPLES_Q = [
-    "간을 분할해줘", "비장을 세그멘테이션해줘", "좌측 폐를 분할해줘",
-    "신장 마스크를 보여줘", "췌장이 어디있어?",
+    "간 분할해줘", "비장 분할해줘", "췌장 분할해줘",
+    "우측 신장 분할해줘", "좌측 폐 분할해줘",
 ]
 
 with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
@@ -1002,7 +1007,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                     with gr.Row():
                         question_input = gr.Textbox(
                             label="질문",
-                            placeholder="간을 분할해줘 / 소견 생성해줘 / 이 CT가 정상인가요?",
+                            placeholder="간 분할해줘 / 비장 분할해줘 / 췌장 분할해줘",
                             lines=1, scale=5,
                         )
                         run_btn   = gr.Button("🔬 실행", variant="primary", scale=1)
@@ -1075,15 +1080,19 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                         reg_btn = gr.Button("설명", variant="secondary", scale=1)
                     reg_answer_html = gr.HTML(value="")
 
-                    # 마스크 다운로드
+                    # 마스크 저장 + PDF 다운로드
                     with gr.Row():
-                        mask_dl_btn  = gr.Button("💾 마스크 저장", variant="secondary", scale=1)
-                        mask_dl_file = gr.File(label="마스크 (.nii.gz)", scale=2)
-
-                    # PDF
+                        mask_dl_btn  = gr.Button("💾 마스크 저장 (.nii.gz)", variant="secondary", scale=1)
+                        pdf_btn      = gr.Button("📄 PDF 보고서 생성", variant="secondary", scale=1)
                     with gr.Row():
-                        pdf_btn    = gr.Button("📄 PDF", variant="secondary", scale=1)
-                        pdf_output = gr.File(label="다운로드", scale=3)
+                        mask_dl_file = gr.File(
+                            label=None, scale=1, visible=False,
+                            elem_classes=["download-file"],
+                        )
+                        pdf_output   = gr.File(
+                            label=None, scale=1, visible=False,
+                            elem_classes=["download-file"],
+                        )
                     pdf_status = gr.Textbox(label=None, interactive=False, lines=1,
                                             visible=False)
 
@@ -1130,13 +1139,27 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
             )
 
             pdf_btn.click(
+                fn=lambda: gr.update(visible=False),
+                outputs=[pdf_output],
+            ).then(
                 fn=generate_pdf_report,
                 outputs=[pdf_output, pdf_status],
+            ).then(
+                fn=lambda p, _: gr.update(value=p, visible=p is not None),
+                inputs=[pdf_output, pdf_status],
+                outputs=[pdf_output],
             )
 
             mask_dl_btn.click(
+                fn=lambda: gr.update(visible=False),
+                outputs=[mask_dl_file],
+            ).then(
                 fn=download_mask_fn,
                 inputs=[sp_z, sp_y, sp_x],
+                outputs=[mask_dl_file],
+            ).then(
+                fn=lambda p: gr.update(value=p, visible=p is not None),
+                inputs=[mask_dl_file],
                 outputs=[mask_dl_file],
             )
 
