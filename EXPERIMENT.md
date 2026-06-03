@@ -26,7 +26,7 @@
 
 ## 실험 1: 번역 전략 비교
 
-**노트북:** `Med3D_Korean_Interface_Pipeline_Experiment.ipynb`
+**노트북:** `Med3D_Korean_Interface_Pipeline.ipynb`
 
 ### 실험 목적
 
@@ -60,6 +60,11 @@ M3D-LaMed는 영어 전용 모델이라 한국어 입력을 처리하지 못한�
 | pancreas_006 | 0.0000 | 0.0000 | 0.5220 | 0.5382 |
 | pancreas_010 | 0.0000 | 오류 | 0.5630 | 0.5630 |
 
+<div align="center">
+  <img src="docs/images/exp_all_results.png" width="750">
+  <br><sub>번역 전략별 Dice Score 비교 (n=5, 췌장)</sub>
+</div>
+
 ### 결과 분석
 
 방법 B의 번역 결과를 보면 "췌장을 분할해줘" → `"Split the pancreas"`로 번역된다. 의미는 맞지만 Dice는 0.0000이다. M3D는 단순히 장기명을 인식하는 것이 아니라 `"Can you segment..."`, `"Please output the mask"` 같은 학습 시 본 특정 토큰 패턴에 강하게 의존한다. 의미가 아무리 올바르더라도 형식이 맞지 않으면 `[SEG]` 토큰 자체를 생성하지 않는다.
@@ -70,7 +75,7 @@ M3D-LaMed는 영어 전용 모델이라 한국어 입력을 처리하지 못한�
 
 ## 실험 2: 표현 다양성 강건성
 
-**노트북:** `Med3D_Korean_Interface_Pipeline_Experiment.ipynb`
+**노트북:** `Med3D_Korean_Interface_Pipeline.ipynb`
 
 ### 실험 목적
 
@@ -99,7 +104,7 @@ Hybrid 파이프라인은 표준 한국어 표현에서 일관되게 0.50+ 성�
 
 ## 실험 3: Threshold Sensitivity
 
-**노트북:** `Med3D_Korean_Interface_Pipeline_Experiment.ipynb`
+**노트북:** `Med3D_Korean_Interface_Pipeline.ipynb`
 
 ### 실험 목적
 
