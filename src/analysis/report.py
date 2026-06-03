@@ -244,9 +244,10 @@ def generate_report(
     _findings_section(pdf, organ_results)
 
     if output_path is None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, prefix="medseg_report_")
-        output_path = tmp.name
-        tmp.close()
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name_part = f"_{patient_name.strip()}" if patient_name and patient_name.strip() else ""
+        filename = f"medseg{name_part}_{now}.pdf"
+        output_path = os.path.join(tempfile.gettempdir(), filename)
 
     pdf.output(output_path)
     return output_path
