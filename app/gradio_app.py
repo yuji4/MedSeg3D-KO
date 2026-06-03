@@ -803,13 +803,18 @@ def download_mask_fn(sp_z=1.0, sp_y=1.0, sp_x=1.0):
     return tmp.name
 
 
-def generate_pdf_report() -> tuple:
+def generate_pdf_report(patient_name, exam_date, age, sex_ko, doctor_notes) -> tuple:
     if not _last_inference.get("organ_results"):
         return None, "⚠️ 먼저 세그멘테이션을 실행해주세요."
+    sex_en = _SEX_MAP.get(sex_ko, "unknown")
     path = generate_report(
         organ_results=_last_inference["organ_results"],
         panel_image=_last_inference.get("panel_image"),
-        patient_id="",
+        patient_name=patient_name or "",
+        patient_age=int(age) if age else None,
+        patient_sex=sex_ko or "",
+        exam_date=exam_date or "",
+        doctor_notes=doctor_notes or "",
     )
     return path, f"✅ PDF 생성: {os.path.basename(path)}"
 
@@ -1143,6 +1148,7 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                 outputs=[pdf_output],
             ).then(
                 fn=generate_pdf_report,
+                inputs=[patient_name_input, exam_date_input, age_input, sex_input, doctor_notes_input],
                 outputs=[pdf_output, pdf_status],
             ).then(
                 fn=lambda p, _: gr.update(value=p, visible=p is not None),
