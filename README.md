@@ -231,7 +231,9 @@ What is the condition of the pancreas in this image?
 | 크기 (mm) | Bounding Box 계산 |
 | 상태 평가   | 정상 범위 비교        |
 
-<!-- clinical.png 준비 중 -->
+<div align="center">
+  <img src="docs/images/clinical.png" width="700">
+</div>
 
 ### 4. VQA
 
