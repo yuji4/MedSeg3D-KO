@@ -306,7 +306,11 @@ CT 전체를 분석하여 소견서를 생성
 
 ## 핵심 실험 결과
 
-> 전체 실험은 EXPERIMENT.md 참고
+<div align="center">
+
+[![EXPERIMENT.md](https://img.shields.io/badge/📄_실험_전체_상세_보기-EXPERIMENT.md-blue?style=for-the-badge)](EXPERIMENT.md)
+
+</div>
 
 본 연구는 개념 검증(Proof of Concept)을 목표로 수행되었으며 모든 실험은 동일한 5개 케이스(Task07 Pancreas, MSD)에서 비교 평가하였습니다.
 
