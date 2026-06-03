@@ -208,7 +208,9 @@ Layer 1은 규칙 기반 키워드 분류기다. 단순한 키워드 매칭만�
 | "췌장이 정상으로 보여?" | VQA | SEG | "보여" 키워드가 SEG 규칙과 충돌 |
 | "신장이 어떤 장기야?" | REG | VQA | REG 키워드 없이 VQA로 fallback |
 
-![Confusion Matrix](docs/images/confusion_matrix.png)
+<div align="center">
+  <img src="docs/images/confusion_matrix.png" width="550">
+</div>
 
 ### 결과 분석
 
@@ -236,7 +238,9 @@ Layer 3는 의도에 따라 적절한 M3D 프롬프트 템플릿을 선택한다
 | VQA 템플릿 | 0.0000 | `"Atrophic pancreas with calcification."` |
 | Report 템플릿 | 0.0000 | `"Numerous liver lesions with peripheral nodular enhancement..."` |
 
-![Task Mismatch](docs/images/task_mismatch.png)
+<div align="center">
+  <img src="docs/images/task_mismatch.png" width="600">
+</div>
 
 ### 결과 분석
 
@@ -280,7 +284,9 @@ Layer 3는 의도에 따라 적절한 M3D 프롬프트 템플릿을 선택한다
 | pancreas_006 | Report 템플릿 | 0.0000 |
 | pancreas_010 | Report 템플릿 | 0.0000 |
 
-![Ablation](docs/images/ablation.png)
+<div align="center">
+  <img src="docs/images/ablation.png" width="650">
+</div>
 
 ### 결과 분석
 

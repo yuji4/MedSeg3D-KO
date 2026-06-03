@@ -66,7 +66,9 @@ Task07 Pancreas (MSD) 데이터셋 5개 케이스를 대상으로 수행한 개�
 
 ---
 
-![Main UI](docs/images/main_ui.png)
+<div align="center">
+  <img src="docs/images/main_ui.png" width="900">
+</div>
 
 ---
 
@@ -206,7 +208,9 @@ VQA
 What is the condition of the pancreas in this image?
 ```
 
-![Intent Classification](docs/images/intent_badge.png)
+<div align="center">
+  <img src="docs/images/intent_badge.png" width="700">
+</div>
 
 ### 2. 다장기 3D 세그멘테이션
 
@@ -215,7 +219,9 @@ What is the condition of the pancreas in this image?
 * NIfTI(.nii.gz) 다운로드
 * 원본 affine 정보 보존
 
-![Segmentation](docs/images/segmentation.png)
+<div align="center">
+  <img src="docs/images/segmentation.png" width="800">
+</div>
 
 ### 3. 임상 정량 분석
 
@@ -225,25 +231,31 @@ What is the condition of the pancreas in this image?
 | 크기 (mm) | Bounding Box 계산 |
 | 상태 평가   | 정상 범위 비교        |
 
-![Clinical Analysis](docs/images/clinical.png)
+<!-- clinical.png 준비 중 -->
 
 ### 4. VQA
 
 자유로운 한국어 질의응답 지원
 
-![VQA](docs/images/vqa.png)
+<div align="center">
+  <img src="docs/images/vqa.png" width="700">
+</div>
 
 ### 5. 소견 생성
 
 CT 전체를 분석하여 소견서를 생성
 
-![Report Generation](docs/images/report.png)
+<div align="center">
+  <img src="docs/images/report.png" width="700">
+</div>
 
 ### 6. 영역 설명
 
 장기의 구조와 이상 소견 설명
 
-![Region Description](docs/images/reg.png)
+<div align="center">
+  <img src="docs/images/reg.png" width="700">
+</div>
 
 ### 7. 환자 관리
 
@@ -251,7 +263,9 @@ CT 전체를 분석하여 소견서를 생성
 * 종단적 추적
 * CSV Export
 
-![Longitudinal](docs/images/longitudinal.png)
+<div align="center">
+  <img src="docs/images/longitudinal.png" width="750">
+</div>
 
 ### 8. PDF 보고서
 
@@ -259,7 +273,9 @@ CT 전체를 분석하여 소견서를 생성
 * 정량 결과
 * 면책 문구 포함
 
-![PDF Report](docs/images/pdf.png)
+<div align="center">
+  <img src="docs/images/pdf.png" width="650">
+</div>
 
 ---
 
@@ -302,7 +318,9 @@ CT 전체를 분석하여 소견서를 생성
 | −Layer 2 |     0.0000 |
 | −Layer 3 |     0.0000 |
 
-![Ablation](docs/images/ablation.png)
+<div align="center">
+  <img src="docs/images/ablation.png" width="650">
+</div>
 
 ---
 
