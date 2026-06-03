@@ -259,14 +259,22 @@ CT 전체를 분석하여 소견서를 생성
   <img src="docs/images/reg.png" width="700">
 </div>
 
-### 7. 환자 관리
+### 7. 환자 관리 및 종단적 추이
 
-* SQLite 기반 저장
-* 종단적 추적
-* CSV Export
+- SQLite 기반 환자 정보 저장
+- 주민등록번호 자동 파싱 (나이/성별), 뒷자리 마스킹, 암호화 저장
+- CSV 내보내기 (전체 / 환자별)
+
+<div align="center">
+  <img src="docs/images/history.png" width="800">
+  <br><sub>검사 이력 테이블</sub>
+</div>
+
+<br>
 
 <div align="center">
   <img src="docs/images/longitudinal.png" width="750">
+  <br><sub>장기 부피 종단적 추이 차트</sub>
 </div>
 
 ### 8. PDF 보고서
