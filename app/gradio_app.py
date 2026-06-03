@@ -589,6 +589,23 @@ def on_rrn_change(rrn: str):
     return gr.update(), gr.update()
 
 
+def _save_to_db(patient_name, sex_ko, rrn, age, exam_date, doctor_notes, organ_results=None):
+    """태스크 종류와 관계없이 환자/검사 정보를 DB에 저장."""
+    try:
+        sex = _SEX_MAP.get(sex_ko, "unknown")
+        parsed = _parse_rrn(rrn or "")
+        birth_year = parsed["birth_year"] if parsed else None
+        pid = upsert_patient(patient_name or "미입력", sex,
+                             rrn=rrn or "", birth_year=birth_year)
+        save_exam(pid,
+                  exam_date or datetime.now().strftime("%Y-%m-%d"),
+                  int(age) if age else 0,
+                  organ_results or [],
+                  notes=doctor_notes or "")
+    except Exception:
+        pass
+
+
 def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
                   age, sex_ko, patient_name, exam_date, doctor_notes, rrn,
                   sp_z=1.0, sp_y=1.0, sp_x=1.0):
@@ -631,6 +648,7 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         ax, sag, cor, legend_val, org_ch = _seg_for_display(
             pipeline, organ_en, alpha, wl, ww, mask_on
         )
+        _save_to_db(patient_name, sex_ko, rrn, age, exam_date, doctor_notes)
         return (
             ax, sag, cor, legend_val,
             _make_answer_html("vqa", answer_ko),
@@ -651,6 +669,7 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         ax, sag, cor, legend_val, org_ch = _seg_for_display(
             pipeline, organ_en, alpha, wl, ww, mask_on
         )
+        _save_to_db(patient_name, sex_ko, rrn, age, exam_date, doctor_notes)
         return (
             ax, sag, cor, legend_val,
             _make_answer_html("caption", answer_ko),
@@ -671,6 +690,7 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         ax, sag, cor, legend_val, org_ch = _seg_for_display(
             pipeline, organ_en, alpha, wl, ww, mask_on
         )
+        _save_to_db(patient_name, sex_ko, rrn, age, exam_date, doctor_notes)
         return (
             ax, sag, cor, legend_val,
             _make_answer_html("reg", answer_ko),
@@ -751,17 +771,7 @@ def run_inference(question_ko, slice_idx, alpha, wl, ww, mask_on,
         "mask_models": _mask_models_full,
     })
 
-    # DB 저장
-    try:
-        parsed = _parse_rrn(rrn or "")
-        birth_year = parsed["birth_year"] if parsed else None
-        pid = upsert_patient(patient_name or "미입력", sex,
-                             rrn=rrn or "", birth_year=birth_year)
-        save_exam(pid,
-                  exam_date or datetime.now().strftime("%Y-%m-%d"),
-                  int(age), organ_results, notes=doctor_notes or "")
-    except Exception:
-        pass
+    _save_to_db(patient_name, sex_ko, rrn, age, exam_date, doctor_notes, organ_results)
 
     # REG용 장기 드롭다운 선택지
     organ_choices = [f"{get_korean_term(org)} ({org})" for org in organs if org]
