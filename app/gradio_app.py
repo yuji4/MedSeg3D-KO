@@ -986,8 +986,8 @@ with gr.Blocks(title="MedSeg-3D-KO", theme=_THEME, css=_CSS) as demo:
                             slice_slider = gr.Slider(0, 31, value=0, step=1,
                                                      label="축상 슬라이스 (0=자동)", scale=3)
                         with gr.Row():
-                            wl_slider = gr.Slider(-200, 400, value=40,  step=10,  label="윈도우 레벨 (HU)")
-                            ww_slider = gr.Slider(100, 2000, value=400, step=50,  label="윈도우 너비 (HU)")
+                            wl_slider = gr.Slider(-1000, 1000, value=40,  step=10,  label="윈도우 레벨 (HU)")
+                            ww_slider = gr.Slider(100,   4000, value=400, step=50,  label="윈도우 너비 (HU)")
                         alpha_slider = gr.Slider(0.1, 0.9, value=0.4, step=0.05, label="마스크 불투명도")
                         # CT 윈도우 프리셋
                         with gr.Row():
