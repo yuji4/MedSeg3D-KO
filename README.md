@@ -2,7 +2,7 @@
 
 <div align="center">
 
-### 한국어 의료 질의를 M3D-LaMed가 이해할 수 있는 프롬프트로 변환하는 3계층 파이프라인 연구 및 CT 세그멘테이션 시스템
+### Korean Prompt Transformation Pipeline for Medical Vision-Language Models
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Gradio](https://img.shields.io/badge/Gradio-4.0+-orange)
@@ -35,25 +35,9 @@ M3D-LaMed
 
 ---
 
-## Contributions
-
-1. 영어 중심 의료 VLM(M3D-LaMed)의 한국어 입력 실패 원인을 체계적으로 분석하였다.
-
-   * 토크나이저 파편화
-   * 장기명 표현 다양성
-   * 프롬프트 패턴 의존성
-
-2. 의도 분류(Intent Classification), 엔티티 정규화(Entity Normalization), 프롬프트 템플릿 선택(Prompt Template Selection)으로 구성된 **3계층 한국어 변환 파이프라인**을 제안하였다.
-
-3. 7종의 실험을 통해 각 계층의 기여도를 정량적으로 분석하고 Ablation Study를 수행하였다.
-
-4. 연구 결과를 검증하기 위한 CT 세그멘테이션 및 임상 분석 웹 애플리케이션을 구현하였다.
-
----
-
 ## Key Result
 
-Task07 Pancreas (MSD) 데이터셋 5개 케이스를 대상으로 수행한 개념 검증(Proof of Concept) 결과입니다.
+> ⚠️ 본 결과는 Task07 Pancreas (MSD) 5개 케이스를 대상으로 수행한 **Proof-of-Concept** 실험입니다. 통계적 일반화를 위한 대규모 검증은 향후 과제입니다.
 
 | 입력 방식                    |    평균 Dice |
 | ------------------------ | ---------: |
@@ -69,6 +53,22 @@ Task07 Pancreas (MSD) 데이터셋 5개 케이스를 대상으로 수행한 개�
 <div align="center">
   <img src="docs/images/main_ui.png" width="900">
 </div>
+
+---
+
+## Contributions
+
+1. 영어 중심 의료 VLM(M3D-LaMed)의 한국어 입력 실패 원인을 체계적으로 분석하였다.
+
+   * 토크나이저 파편화
+   * 장기명 표현 다양성
+   * 프롬프트 패턴 의존성
+
+2. 의도 분류(Intent Classification), 엔티티 정규화(Entity Normalization), 프롬프트 템플릿 선택(Prompt Template Selection)으로 구성된 **3계층 한국어 변환 파이프라인**을 제안하였다.
+
+3. 7종의 실험을 통해 각 계층의 기여도를 정량적으로 분석하고 Ablation Study를 수행하였다.
+
+4. 연구 결과를 검증하기 위한 CT 세그멘테이션 및 임상 분석 웹 애플리케이션을 구현하였다.
 
 ---
 
@@ -160,15 +160,7 @@ Layer 2는 다양한 표현을 M3D 학습 어휘(canonical form)로 정규화합
    pancreas
 ```
 
-정규화 없이 한국어를 그대로 입력하면 토크나이저가 과도하게 파편화하여 M3D가 학습한 표현 공간과 멀어집니다.
-
-| 한국어 | 영어       | 한국어 토큰 수 | 영어 토큰 수 |
-| --- | -------- | :------: | :-----: |
-| 간   | liver    |     4    |    2    |
-| 신장  | kidney   |     3    |    2    |
-| 췌장  | pancreas |     5    |    3    |
-| 콩팥  | kidney   |     7    |    2    |
-| 대동맥 | aorta    |     6    |    3    |
+정규화 없이 한국어를 그대로 입력하면 토크나이저가 과도하게 파편화되어 임베딩 공간에서 전혀 다른 표현이 됩니다. (상세 분석: [EXPERIMENT.md](EXPERIMENT.md))
 
 ### Layer 3 — Template Selection
 
@@ -262,7 +254,7 @@ CT 전체를 분석하여 소견서를 생성
 ### 7. 환자 관리 및 종단적 추이
 
 - SQLite 기반 환자 정보 저장
-- 주민등록번호 자동 파싱 (나이/성별), 뒷자리 마스킹, 암호화 저장
+- 환자 식별 정보 마스킹 및 암호화 저장 (나이/성별 자동 추출)
 - CSV 내보내기 (전체 / 환자별)
 
 <div align="center">
