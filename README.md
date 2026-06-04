@@ -443,38 +443,78 @@ MedSeg-3D-KO/
 <details>
 <summary>직접 실행 코드 보기</summary>
 
+**1. 레포 클론**
 ```python
-# 1. 레포 클론 및 패키지 설치
 !git clone https://github.com/yuji4/MedSeg3D-KO.git
 %cd MedSeg3D-KO
-!pip install -r requirements.txt
-!apt-get install -y fonts-nanum -q
+```
 
-# 2. 모델 로드 (약 5분 소요)
-import sys, torch
+**2. 라이브러리 설치**
+```python
+!pip install -r requirements.txt
+```
+
+**3. 임포트 및 한국어 폰트**
+```python
+import sys, os
+import numpy as np
+import nibabel as nib
+import torch
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+import pandas as pd
+from deep_translator import GoogleTranslator
+
 sys.path.insert(0, '/content/MedSeg3D-KO')
 
+!apt-get install -y fonts-nanum -q
+fm.fontManager.addfont('/usr/share/fonts/truetype/nanum/NanumGothic.ttf')
+plt.rcParams['font.family'] = 'NanumGothic'
+plt.rcParams['axes.unicode_minus'] = False
+print("완료")
+```
+
+**4. 모델 로드** (약 5분 소요)
+```python
 from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
 
 model_name = "GoodBaiBai88/M3D-LaMed-Phi-3-4B"
+
 tokenizer = AutoTokenizer.from_pretrained(
-    model_name, model_max_length=512,
-    padding_side="right", use_fast=False, trust_remote_code=True,
+    model_name,
+    model_max_length=512,
+    padding_side="right",
+    use_fast=False,
+    trust_remote_code=True
 )
 model = AutoModelForCausalLM.from_pretrained(
-    model_name, torch_dtype=torch.bfloat16,
-    device_map='auto', trust_remote_code=True,
+    model_name,
+    torch_dtype=torch.bfloat16,
+    device_map='auto',
+    trust_remote_code=True
 )
+print("로드 성공")
+```
 
-# 3. 앱 실행
+**5. 인터페이스 실행**
+```python
+import sys
+for key in list(sys.modules.keys()):
+    if 'src' in key or 'app' in key:
+        del sys.modules[key]
+
+sys.path.insert(0, '/content/MedSeg3D-KO')
+
 from src.inference.segmentation import SegmentationPipeline
-import app.gradio_app as app_module
 
-pipeline = SegmentationPipeline()
-pipeline.model = model
-pipeline.tokenizer = tokenizer
-pipeline._device = next(model.parameters()).device
-app_module._pipeline = pipeline
+pipeline2 = SegmentationPipeline()
+pipeline2.model = model
+pipeline2.tokenizer = tokenizer
+pipeline2._device = next(model.parameters()).device
+
+import app.gradio_app as app_module
+app_module._pipeline = pipeline2
 
 app_module.demo.queue()
 app_module.demo.launch(share=True)
