@@ -201,6 +201,11 @@ REG
 * 축상 / 시상 / 관상면 3방향 동시 시각화
 * NIfTI (.nii.gz) 마스크 다운로드 (원본 affine 보존)
 
+<div align="center">
+  <img src="docs/images/segmentation.png" width="800">
+</div>
+
+
 **CT 윈도우 프리셋** — 장기별 최적 HU 범위 자동 적용
 
 | 프리셋 | WL | WW | 적합한 경우 |
@@ -214,9 +219,6 @@ REG
   <img src="docs/images/preset.png" width="750">
 </div>
 
-<div align="center">
-  <img src="docs/images/segmentation.png" width="800">
-</div>
 
 ### 3. 임상 정량 분석
 
