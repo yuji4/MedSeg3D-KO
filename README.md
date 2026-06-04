@@ -433,13 +433,56 @@ MedSeg-3D-KO/
 
 ---
 
-## Quick Start
+## Quick Start (Google Colab)
 
-1. notebooks/m3d_KO_run.ipynb 실행
-2. 모델 로드
-3. 공개 URL 접속
-4. CT 업로드
-5. 한국어 질의 입력
+1. `notebooks/m3d_KO_run.ipynb` 열기
+2. 셀 순서대로 실행 (모델 로드 약 5분)
+3. 생성된 공개 URL 접속
+4. CT 파일 업로드 후 한국어로 질문 입력
+
+<details>
+<summary>직접 실행 코드 보기</summary>
+
+```python
+# 1. 레포 클론 및 패키지 설치
+!git clone https://github.com/yuji4/MedSeg3D-KO.git
+%cd MedSeg3D-KO
+!pip install -r requirements.txt
+!apt-get install -y fonts-nanum -q
+
+# 2. 모델 로드 (약 5분 소요)
+import sys, torch
+sys.path.insert(0, '/content/MedSeg3D-KO')
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+model_name = "GoodBaiBai88/M3D-LaMed-Phi-3-4B"
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name, model_max_length=512,
+    padding_side="right", use_fast=False, trust_remote_code=True,
+)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name, torch_dtype=torch.bfloat16,
+    device_map='auto', trust_remote_code=True,
+)
+
+# 3. 앱 실행
+from src.inference.segmentation import SegmentationPipeline
+import app.gradio_app as app_module
+
+pipeline = SegmentationPipeline()
+pipeline.model = model
+pipeline.tokenizer = tokenizer
+pipeline._device = next(model.parameters()).device
+app_module._pipeline = pipeline
+
+app_module.demo.queue()
+app_module.demo.launch(share=True)
+```
+
+> ⚠️ T4 GPU 환경 권장.
+
+</details>
 
 ---
 
