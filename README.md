@@ -211,6 +211,10 @@ REG
 | 뇌 | 35 | 80 | 뇌 실질 |
 
 <div align="center">
+  <img src="docs/images/preset.png" width="750">
+</div>
+
+<div align="center">
   <img src="docs/images/segmentation.png" width="800">
 </div>
 
@@ -218,9 +222,12 @@ REG
 
 | 지표      | 설명              |
 | ------- | --------------- |
-| 부피 (mL) | 복셀 수 기반 계산      |
-| 크기 (mm) | Bounding Box 계산 |
-| 상태 평가   | 정상 범위 비교        |
+| 부피 (mL) | 복셀 수 기반 계산 |
+| 크기 (mm) | 바운딩박스 D × H × W |
+| 임상 상태 | 정상 ✅ / 초과 ⚠️ / 미만 ⚠️ |
+
+정상 범위 기준: 해부학 및 영상의학 교과서 기반 성인(18~65세) 참고값. 연령·성별 보정 적용.
+> 참고: Gray's Anatomy, Radiology Reference Article (Radiopaedia), 대한영상의학회 표준 참고치
 
 <div align="center">
   <img src="docs/images/clinical.png" width="700">
