@@ -13,6 +13,12 @@
 
 ---
 
+<div align="center">
+  <img src="docs/images/main_ui.png" width="900">
+</div>
+
+---
+
 ## 개요
 
 M3D-LaMed는 영어 기반 데이터로 학습된 의료 VLM(Vision Language Model)으로, 한국어 입력에 대한 동작이 공식적으로 검증되어 있지 않습니다.
@@ -47,12 +53,6 @@ M3D-LaMed
 | Full Pipeline (L1+L2+L3) | **0.5515** |
 
 한국어 입력 시 완전히 실패하던 M3D-LaMed를 대상으로, 3계층 한국어 변환 파이프라인을 적용하여 실제 세그멘테이션이 가능한 수준으로 성능을 회복하였습니다.
-
----
-
-<div align="center">
-  <img src="docs/images/main_ui.png" width="900">
-</div>
 
 ---
 
@@ -184,21 +184,12 @@ REG
 
 ### 1. 한국어 자연어 질의
 
-```text
-"간 분할해줘"
-      ↓
-SEG
-      ↓
-Can you segment the liver in this image?
-```
-
-```text
-"췌장 상태 어때?"
-      ↓
-VQA
-      ↓
-What is the condition of the pancreas in this image?
-```
+| 한국어 질의 | 의도 | 변환된 M3D 프롬프트 |
+|-----------|:---:|-----------------|
+| "간 분할해줘" | **SEG** | Can you segment the liver in this image? |
+| "췌장 상태 어때?" | **VQA** | What is the condition of the pancreas in this image? |
+| "소견서 써줘" | **REPORT** | What are the main findings in this medical image? |
+| "비장 기능 설명해줘" | **REG** | Describe the appearance and condition of the spleen... |
 
 <div align="center">
   <img src="docs/images/intent_badge.png" width="700">
@@ -207,9 +198,17 @@ What is the condition of the pancreas in this image?
 ### 2. 다장기 3D 세그멘테이션
 
 * 104종 해부학 구조 지원
-* 축상/시상/관상면 시각화
-* NIfTI(.nii.gz) 다운로드
-* 원본 affine 정보 보존
+* 축상 / 시상 / 관상면 3방향 동시 시각화
+* NIfTI (.nii.gz) 마스크 다운로드 (원본 affine 보존)
+
+**CT 윈도우 프리셋** — 장기별 최적 HU 범위 자동 적용
+
+| 프리셋 | WL | WW | 적합한 경우 |
+|--------|:--:|:--:|-----------|
+| 복부 | 40 | 400 | 간·췌장·비장 등 복부 장기 |
+| 폐 | -600 | 1500 | 폐 실질·기도 |
+| 뼈 | 400 | 1500 | 척추·골격 |
+| 뇌 | 35 | 80 | 뇌 실질 |
 
 <div align="center">
   <img src="docs/images/segmentation.png" width="800">
