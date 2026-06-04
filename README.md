@@ -378,6 +378,39 @@ M3D 공식 Grounding 태스크는 구현되지 않았습니다.
 
 ---
 
+## 디렉토리 구조
+
+```
+MedSeg-3D-KO/
+├── app/
+│   ├── gradio_app.py          # Gradio 웹 앱 메인
+│   └── visualization.py       # 3방향 슬라이스 시각화
+├── src/
+│   ├── translation/
+│   │   ├── pipeline.py        # 3계층 변환 파이프라인 (핵심)
+│   │   ├── translator.py      # 한↔영 번역 레이어
+│   │   └── medical_terms.py   # 104종 의료 용어 사전
+│   ├── inference/
+│   │   ├── model_loader.py    # M3D 모델 로드
+│   │   └── segmentation.py    # 추론 파이프라인
+│   ├── analysis/
+│   │   ├── volume.py          # 부피·크기 계산
+│   │   ├── clinical.py        # 정상범위 비교 / 임상 평가
+│   │   └── report.py          # PDF 보고서 생성
+│   └── database/
+│       ├── db.py              # SQLite 연결 및 초기화
+│       └── crud.py            # 환자 CRUD
+├── notebooks/
+│   ├── m3d_KO_run.ipynb                                  # Colab 실행 스크립트
+│   ├── Med3D_Korean_Interface_Pipeline.ipynb             # 실험 1~4
+│   ├── Korean_Medical_Query_Transformation_Experiment.ipynb  # 실험 5~7
+│   └── M3D_KO_Prompt_Optimal.ipynb                       # 실험 4 (프롬프트 최적화)
+├── EXPERIMENT.md              # 실험 전체 상세
+└── requirements.txt
+```
+
+---
+
 ## Quick Start
 
 1. notebooks/m3d_KO_run.ipynb 실행
