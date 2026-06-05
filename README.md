@@ -427,7 +427,7 @@ MedSeg-3D-KO/
 1. `notebooks/m3d_KO_run.ipynb` 열기
 2. 셀 순서대로 실행 (모델 로드 약 5분)
 3. 생성된 공개 URL 접속
-4. CT 파일 업로드 후 한국어로 질문 입력
+4. CT 파일 업로드 후 한국어로 질문 입력 (`data/examples/CT_2.nii.gz` 로 바로 테스트 가능)
 
 <details>
 <summary>직접 실행 코드 보기</summary>
@@ -510,9 +510,6 @@ app_module.demo.launch(share=True)
 ```
 
 > ⚠️ T4 GPU 환경 권장.
-
-**예시 CT 데이터로 바로 테스트해볼 수 있습니다.**
-레포 클론 후 `data/examples/CT_2.nii.gz` 파일을 앱에 업로드하면 됩니다.
 
 </details>
 
