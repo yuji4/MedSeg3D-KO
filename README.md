@@ -511,6 +511,9 @@ app_module.demo.launch(share=True)
 
 > ⚠️ T4 GPU 환경 권장.
 
+**예시 CT 데이터로 바로 테스트해볼 수 있습니다.**
+레포 클론 후 `data/examples/CT_2.nii.gz` 파일을 앱에 업로드하면 됩니다.
+
 </details>
 
 ---
